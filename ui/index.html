@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="vi" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>ViewIndex — YouTube Metadata & Analytics</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- DRAG & DROP OVERLAY -->
+  <div id="drag-overlay" class="drag-overlay hidden">
+    <div class="drag-box">
+      <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="17 8 12 3 7 8"></polyline>
+        <line x1="12" y1="3" x2="12" y2="15"></line>
+      </svg>
+      <h3>Thả đường dẫn YouTube vào đây để phân tích</h3>
+    </div>
+  </div>
+
+  <div class="app-container">
+    <!-- TOP HEADER -->
+    <header class="app-header">
+      <div class="logo-area">
+        <div class="logo-badge">
+          <img src="app-icon.png" alt="ViewIndex" width="30" height="30" style="object-fit: contain;" />
+        </div>
+        <div>
+          <h1 class="app-title">ViewIndex <span class="v2-badge">v2.0 Pro</span></h1>
+          <p class="app-tagline">Bóc tách dữ liệu Video & Kênh YouTube, tải media, phân tích SEO bằng Rust & yt-dlp</p>
+        </div>
+      </div>
+
+      <div class="header-right">
+        <div id="system-status" class="status-chip loading" title="Trạng thái yt-dlp">
+          <span class="status-dot"></span>
+          <span id="ytdlp-version-text">Đang kiểm tra yt-dlp...</span>
+        </div>
+        
+        <button id="update-ytdlp-btn" class="icon-btn-text" title="Chạy yt-dlp -U để cập nhật bản mới nhất">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"></polyline>
+            <polyline points="1 20 1 14 7 14"></polyline>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"></path>
+          </svg>
+          <span>Update yt-dlp</span>
+        </button>
+
+        <button id="compare-modal-btn" class="icon-btn-text" title="So sánh 2 video">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M16 3h5v5"></path>
+            <path d="M4 20L21 3"></path>
+            <path d="M21 16v5h-5"></path>
+            <path d="M15 15l6 6"></path>
+            <path d="M4 4l5 5"></path>
+          </svg>
+          <span>So sánh Video</span>
+        </button>
+
+        <button id="theme-toggle-btn" class="icon-btn" title="Chuyển đổi Sáng / Tối">
+          <span id="theme-icon">🌙</span>
+        </button>
+
+        <button id="history-toggle-btn" class="icon-btn" title="Lịch sử phân tích">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <polyline points="12 6 12 12 16 14"></polyline>
+          </svg>
+          <span class="badge" id="history-count">0</span>
+        </button>
+      </div>
+    </header>
+
+    <!-- SEARCH & INPUT HERO -->
+    <section class="search-section card">
+      <div class="search-bar-row">
+        <div class="nav-history-controls">
+          <button id="nav-back-btn" class="nav-btn" title="Quay lại (Alt + ←)" disabled>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="19" y1="12" x2="5" y2="12"></line>
+              <polyline points="12 19 5 12 12 5"></polyline>
+            </svg>
+          </button>
+          <button id="nav-forward-btn" class="nav-btn" title="Tiến tới (Alt + →)" disabled>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+              <polyline points="12 5 19 12 12 19"></polyline>
+            </svg>
+          </button>
+        </div>
+        <div class="input-wrapper">
+          <div class="input-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
+              <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
+            </svg>
+          </div>
+          <input 
+            type="text" 
+            id="url-input" 
+            placeholder="Dán link Video (watch?v=...), link Kênh (@ChannelName / channel/...) hoặc link Playlist..." 
+            autocomplete="off"
+            spellcheck="false"
+          />
+          <button id="paste-btn" class="quick-tool-btn" title="Dán từ bộ nhớ tạm (Clipboard)">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"></path>
+              <rect x="8" y="2" width="8" height="4" rx="1" ry="1"></rect>
+            </svg>
+            <span>Dán</span>
+          </button>
+          <button id="clear-btn" class="quick-tool-btn hidden" title="Xóa nội dung">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="6" x2="6" y2="18"></line>
+              <line x1="6" y1="6" x2="18" y2="18"></line>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="search-actions">
+        <div class="left-actions">
+          <button id="sample-video-btn" class="text-link-btn">
+            🎬 Video mẫu
+          </button>
+          <button id="sample-channel-btn" class="text-link-btn">
+            📺 Kênh mẫu (@TED)
+          </button>
+          
+          <div class="cookie-select-wrapper">
+            <label for="cookie-select">Cookies:</label>
+            <select id="cookie-select">
+              <option value="none">Không dùng cookies</option>
+              <option value="chrome">Google Chrome</option>
+              <option value="edge">Microsoft Edge</option>
+              <option value="firefox">Mozilla Firefox</option>
+              <option value="brave">Brave</option>
+            </select>
+          </div>
+        </div>
+
+        <button id="analyze-btn" class="btn-primary">
+          <svg class="spin-icon hidden" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="12" y1="2" x2="12" y2="6"></line>
+            <line x1="12" y1="18" x2="12" y2="22"></line>
+            <line x1="4.93" y1="4.93" x2="7.76" y2="7.76"></line>
+            <line x1="16.24" y1="16.24" x2="19.07" y2="19.07"></line>
+            <line x1="2" y1="12" x2="6" y2="12"></line>
+            <line x1="18" y1="12" x2="22" y2="12"></line>
+            <line x1="4.93" y1="19.07" x2="7.76" y2="16.24"></line>
+            <line x1="16.24" y1="7.76" x2="19.07" y2="4.93"></line>
+          </svg>
+          <svg class="action-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
+          </svg>
+          <span id="analyze-btn-text">Phân tích</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- DOWNLOAD STATUS BANNER WITH REAL-TIME PROGRESS BAR -->
+    <div id="download-banner" class="banner info hidden">
+      <div class="banner-icon">
+        <svg id="dl-banner-spin-icon" class="spin-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <polyline points="12 6 12 12 16 14"></polyline>
+        </svg>
+      </div>
+      <div class="banner-content">
+        <div class="download-banner-header">
+          <div id="download-banner-title" class="banner-title">Đang tải tệp về máy...</div>
+          <div id="download-progress-pct" class="progress-pct-badge">0%</div>
+        </div>
+        
+        <!-- PROGRESS TRACK -->
+        <div class="progress-track">
+          <div id="download-progress-bar" class="progress-bar-fill" style="width: 0%;"></div>
+        </div>
+
+        <div class="download-stats-row">
+          <span id="dl-stat-status" class="dl-stat">Chuẩn bị kết nối...</span>
+          <span id="dl-stat-speed" class="dl-stat">--</span>
+          <span id="dl-stat-eta" class="dl-stat">--</span>
+          <span id="dl-stat-total" class="dl-stat">--</span>
+        </div>
+      </div>
+      <div class="banner-actions">
+        <button id="open-downloaded-file-btn" class="btn-primary btn-sm hidden">Mở tệp</button>
+        <button id="open-downloaded-folder-btn" class="btn-secondary btn-sm hidden">Thư mục chứa</button>
+        <button id="close-download-banner-btn" class="close-banner-btn">&times;</button>
+      </div>
+    </div>
+
+    <!-- ERROR BANNER -->
+    <div id="error-banner" class="banner error hidden">
+      <div class="banner-icon">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <circle cx="12" cy="12" r="10"></circle>
+          <line x1="12" y1="8" x2="12" y2="12"></line>
+          <line x1="12" y1="16" x2="12.01" y2="16"></line>
+        </svg>
+      </div>
+      <div class="banner-content">
+        <div class="banner-title">Lỗi phân tích</div>
+        <div id="error-message" class="banner-text">...</div>
+      </div>
+      <button id="close-error-btn" class="close-banner-btn">&times;</button>
+    </div>
+
+    <!-- INITIAL EMPTY STATE -->
+    <div id="empty-state" class="empty-state">
+      <div class="empty-icon-wrap">
+        <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+          <circle cx="11" cy="11" r="8"></circle>
+          <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+          <path d="M11 8v6"></path>
+          <path d="M8 11h6"></path>
+        </svg>
+      </div>
+      <h2>Sẵn sàng phân tích Video hoặc Kênh YouTube</h2>
+      <p>Hỗ trợ đầy đủ link <strong>Video đơn lẻ</strong>, link <strong>Kênh (@ChannelName)</strong> và <strong>Danh sách phát (Playlist)</strong>. Bạn cũng có thể kéo & thả đường link trực tiếp vào đây!</p>
+      <div class="feature-pills">
+        <span>🎬 Phân tích Video & Streams</span>
+        <span>📺 Phân tích Kênh & Playlist</span>
+        <span>⚡ Tải 1-Click MP4/MP3</span>
+        <span>🏷️ Bộ đếm ký tự Tags (500)</span>
+        <span>📈 Biểu đồ cao trào Heatmap</span>
+        <span>⚔️ So sánh 2 Video</span>
+        <span>📊 Xuất dữ liệu CSV/Excel</span>
+      </div>
+    </div>
+
+    <!-- LOADING STATE -->
+    <div id="loading-state" class="loading-state hidden">
+      <div class="spinner-pulse"></div>
+      <h3 id="loading-title">Đang kết nối và bóc tách dữ liệu yt-dlp...</h3>
+      <p id="loading-subtitle">Quá trình này trích xuất toàn bộ siêu dữ liệu có cấu trúc, luồng phân giải, mốc thời gian...</p>
+    </div>
+
+    <!-- CHANNEL / PLAYLIST RESULT CONTAINER -->
+    <main id="channel-container" class="channel-container hidden">
+      <div class="channel-header-card card">
+        <div id="channel-banner-wrap" class="channel-banner-wrap hidden">
+          <img id="channel-banner-img" src="" alt="Channel Banner" />
+        </div>
+        <div class="channel-profile-row">
+          <img id="channel-avatar-img" class="channel-avatar" src="" alt="Avatar" />
+          <div class="channel-profile-info">
+            <div class="channel-title-row">
+              <h2 id="channel-title-text" class="channel-name-title">--</h2>
+              <span id="channel-badge-type" class="pill pill-primary">KÊNH YOUTUBE</span>
+            </div>
+            <div class="channel-meta-tags">
+              <span id="channel-uploader-id" class="meta-tag">--</span>
+              <span id="channel-subs-count" class="meta-tag">-- người đăng ký</span>
+              <span id="channel-total-videos" class="meta-tag">-- video</span>
+            </div>
+            <p id="channel-desc-text" class="channel-desc-text">--</p>
+          </div>
+          <div class="channel-header-actions">
+            <button id="channel-open-url-btn" class="btn-secondary">🔗 Mở Kênh</button>
+            <button id="channel-export-csv-btn" class="btn-secondary">📊 Xuất CSV Video</button>
+            <button id="channel-dl-thumbnails-btn" class="btn-secondary">📥 Tải Thumbnail</button>
+            <span id="thumb-dl-status" class="thumb-dl-progress hidden">
+              <span id="thumb-dl-text">0/0</span>
+              <span class="mini-bar"><span id="thumb-dl-bar" class="mini-bar-fill" style="width:0%"></span></span>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <!-- CHANNEL VIDEOS TABLE -->
+      <div class="card mt-4">
+        <div class="card-header-flex">
+          <div>
+            <h3 class="info-group-title mb-0">Danh sách Video của Kênh / Playlist (<span id="channel-videos-count-badge">0</span>)</h3>
+            <p class="section-desc">Nhấp vào "Phân tích sâu" tại video bất kỳ để xem toàn bộ siêu dữ liệu chi tiết của video đó</p>
+          </div>
+          <input type="text" id="filter-channel-videos-input" class="search-mini-input" placeholder="🔍 Tìm kiếm tiêu đề video..." />
+        </div>
+
+        <div class="table-responsive">
+          <table class="data-table" id="channel-videos-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Ảnh thu nhỏ</th>
+                <th>Tiêu đề Video</th>
+                <th>Thời lượng</th>
+                <th id="th-views" class="sortable-th" title="Bấm để sắp xếp theo lượt xem">Lượt xem <span class="sort-icon">▲▼</span></th>
+                <th>Video ID</th>
+                <th>Thao tác</th>
+              </tr>
+            </thead>
+            <tbody id="channel-videos-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+
+    <!-- SINGLE VIDEO RESULT CONTAINER -->
+    <main id="result-container" class="result-container hidden">
+      <!-- HERO VIDEO HEADER BAR -->
+      <div class="video-hero-card card">
+        <div class="hero-thumb-wrapper">
+          <img id="video-thumbnail" src="" alt="Thumbnail" />
+          <span id="badge-duration" class="thumb-badge">--:--</span>
+          <span id="badge-live-status" class="thumb-live-badge hidden">LIVE</span>
+        </div>
+        <div class="hero-details">
+          <div class="hero-tags-row">
+            <span id="hero-badge-type" class="pill pill-primary">Video</span>
+            <span id="hero-badge-resolution" class="pill pill-muted">--</span>
+            <span id="hero-badge-upload-date" class="pill pill-muted">--</span>
+          </div>
+          <h2 id="video-title" class="video-title">--</h2>
+          <div class="hero-channel-row">
+            <div class="channel-info">
+              <span class="channel-icon">📺</span>
+              <strong id="channel-name">--</strong>
+              <span id="channel-subscribers" class="sub-count">--</span>
+            </div>
+            <div class="hero-actions">
+              <button id="open-youtube-btn" class="btn-secondary" title="Mở trên trình duyệt">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path>
+                  <polyline points="15 3 21 3 21 9"></polyline>
+                  <line x1="10" y1="14" x2="21" y2="3"></line>
+                </svg>
+                Xem trên YouTube
+              </button>
+              <button id="export-json-btn" class="btn-secondary" title="Tải xuống tệp JSON đầy đủ">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                  <polyline points="7 10 12 15 17 10"></polyline>
+                  <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                Xuất JSON
+              </button>
+              <button id="copy-summary-btn" class="btn-secondary" title="Sao chép tóm tắt định dạng text">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                </svg>
+                Sao chép tóm tắt
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 1-CLICK MEDIA DOWNLOAD TOOLBAR -->
+      <div class="download-toolbar card">
+        <div class="dl-toolbar-title">
+          <span>⚡ Tải nhanh (Chọn nơi lưu trong File Explorer):</span>
+        </div>
+        <div class="dl-buttons-grid">
+          <button class="btn-dl" data-dl-type="video_1080p">
+            🎬 <strong>Video 1080p</strong> MP4
+          </button>
+          <button class="btn-dl" data-dl-type="video_720p">
+            🎬 <strong>Video 720p</strong> MP4
+          </button>
+          <button class="btn-dl" data-dl-type="video_best">
+            🌟 <strong>Video Gốc</strong> (Cao nhất)
+          </button>
+          <button class="btn-dl" data-dl-type="audio_mp3">
+            🎵 <strong>Âm thanh MP3</strong> (320kbps)
+          </button>
+          <button class="btn-dl" data-dl-type="thumbnail">
+            🖼️ <strong>Thumbnail</strong> Gốc
+          </button>
+          <button class="btn-dl" data-dl-type="subtitles">
+            💬 <strong>Phụ đề</strong> .SRT
+          </button>
+        </div>
+      </div>
+
+      <!-- TABS NAVIGATION -->
+      <nav class="tabs-nav">
+        <button class="tab-btn active" data-tab="tab-overview">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"></circle>
+            <line x1="12" y1="16" x2="12" y2="12"></line>
+            <line x1="12" y1="8" x2="12.01" y2="8"></line>
+          </svg>
+          Tổng quan
+        </button>
+        <button class="tab-btn" data-tab="tab-stats">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="18" y1="20" x2="18" y2="10"></line>
+            <line x1="12" y1="20" x2="12" y2="4"></line>
+            <line x1="6" y1="20" x2="6" y2="14"></line>
+          </svg>
+          Số liệu & Tương tác
+        </button>
+        <button class="tab-btn" data-tab="tab-tags">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+            <line x1="7" y1="7" x2="7.01" y2="7"></line>
+          </svg>
+          Tags & SEO (<span id="tags-tab-count">0</span>)
+        </button>
+        <button class="tab-btn" data-tab="tab-formats">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="23 7 16 12 23 17 23 7"></polygon>
+            <rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect>
+          </svg>
+          Định dạng & Streams (<span id="formats-tab-count">0</span>)
+        </button>
+        <button class="tab-btn" data-tab="tab-chapters">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="8" y1="6" x2="21" y2="6"></line>
+            <line x1="8" y1="12" x2="21" y2="12"></line>
+            <line x1="8" y1="18" x2="21" y2="18"></line>
+          </svg>
+          Chương video (<span id="chapters-tab-count">0</span>)
+        </button>
+        <button class="tab-btn" data-tab="tab-heatmap">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
+          </svg>
+          Biểu đồ cao trào (Heatmap)
+        </button>
+        <button class="tab-btn" data-tab="tab-player">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="5 3 19 12 5 21 5 3"></polygon>
+          </svg>
+          Xem thử trong App
+        </button>
+        <button class="tab-btn" data-tab="tab-description">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+            <polyline points="14 2 14 8 20 8"></polyline>
+          </svg>
+          Mô tả
+        </button>
+        <button class="tab-btn" data-tab="tab-json">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="16 18 22 12 16 6"></polyline>
+            <polyline points="8 6 2 12 8 18"></polyline>
+          </svg>
+          Dữ liệu JSON Gốc
+        </button>
+      </nav>
+
+      <!-- TAB CONTENT AREA -->
+      <div class="tab-panels">
+        <!-- 1. OVERVIEW TAB -->
+        <div id="tab-overview" class="tab-panel active">
+          <div class="overview-grid">
+            <div class="info-group card">
+              <h3 class="info-group-title">Thông tin cơ bản</h3>
+              <div class="kv-list">
+                <div class="kv-item">
+                  <span class="kv-label">Video ID:</span>
+                  <div class="kv-val-wrap">
+                    <span id="ov-video-id" class="code-text">--</span>
+                    <button class="copy-field-btn" data-copy-target="ov-video-id" title="Sao chép">📋</button>
+                  </div>
+                </div>
+                <div class="kv-item">
+                  <span class="kv-label">Thời lượng:</span>
+                  <div class="kv-val-wrap">
+                    <span id="ov-duration">--</span>
+                  </div>
+                </div>
+                <div class="kv-item">
+                  <span class="kv-label">Ngày tải lên (UTC):</span>
+                  <div class="kv-val-wrap">
+                    <span id="ov-upload-date">--</span>
+                  </div>
+                </div>
+                <div class="kv-item">
+                  <span class="kv-label">Timestamp đăng:</span>
+                  <div class="kv-val-wrap">
+                    <span id="ov-timestamp" class="code-text">--</span>
+                  </div>
+                </div>
+                <div class="kv-item">
+                  <span class="kv-label">Ngày phát hành:</span>
+                  <div class="kv-val-wrap">
+                    <span id="ov-release-date">--</span>
+                  </div>
+                </div>
+                <div class="kv-item">
+                  <span class="kv-label">Trạng thái phát sóng:</span>
+                  <div class="kv-val-wrap">
+                    <span id="ov-live-status" class="pill pill-accent">--</span>
+                  </div>
+                </div>
+                <div class="kv-item">
+                  <span class="kv-label">Đã từng phát trực tiếp:</span>
+                  <div class="kv-val-wrap">
+                    <span id="ov-was-live">--</span>
+                  </div>
+                </div>
+                <div class="kv-item">
+                  <span class="kv-label">Đường dẫn gốc:</span>
+                  <div class="kv-val-wrap">
+                    <a id="ov-webpage-url" href="#" target="_blank" class="link-text ellipsis">--</a>
+                    <button class="copy-field-btn" data-copy-target="ov-webpage-url" title="Sao chép">📋</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="info-group card">
+              <h3 class="info-group-title">Thông tin kênh & bản quyền</h3>
+              <div class="kv-list">
+                <div class="kv-item">
+                  <span class="kv-label">Kênh phát:</span>
+                  <div class="kv-val-wrap">
+                    <strong id="ov-channel-title">--</strong>
+                  </div>
+                </div>
+                <div class="kv-item">
+                  <span class="kv-label">Channel ID:</span>
+                  <div class="kv-val-wrap">
+                    <span id="ov-channel-id" class="code-text">--</span>
+                    <button class="copy-field-btn" data-copy-target="ov-channel-id" title="Sao chép">📋</button>
+                  </div>
+                </div>
+                <div class="kv-item">
+                  <span class="kv-label">Người tải lên (Uploader):</span>
+                  <div class="kv-val-wrap">
+                    <span id="ov-uploader">--</span>
+                  </div>
+                </div>
+                <div class="kv-item">
+                  <span class="kv-label">Uploader ID:</span>
+                  <div class="kv-val-wrap">
+                    <span id="ov-uploader-id" class="code-text">--</span>
+                  </div>
+                </div>
+                <div class="kv-item">
+                  <span class="kv-label">Giới hạn độ tuổi:</span>
+                  <div class="kv-val-wrap">
+                    <span id="ov-age-limit">--</span>
+                  </div>
+                </div>
+                <div class="kv-item">
+                  <span class="kv-label">Giấy phép:</span>
+                  <div class="kv-val-wrap">
+                    <span id="ov-license">Standard YouTube License</span>
+                  </div>
+                </div>
+                <div class="kv-item">
+                  <span class="kv-label">Ngôn ngữ gốc:</span>
+                  <div class="kv-val-wrap">
+                    <span id="ov-language">--</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- THUMBNAIL GALLERY PREVIEWS -->
+          <div class="card mt-4">
+            <div class="card-header-flex">
+              <h3 class="info-group-title mb-0">Hình thu nhỏ (Thumbnails)</h3>
+              <button id="copy-thumb-url-btn" class="btn-secondary btn-sm">Sao chép URL ảnh bìa tốt nhất</button>
+            </div>
+            <div id="thumbnails-gallery" class="thumb-gallery-grid"></div>
+          </div>
+        </div>
+
+        <!-- 2. STATS TAB -->
+        <div id="tab-stats" class="tab-panel">
+          <div class="stats-cards-grid">
+            <div class="stat-card card">
+              <div class="stat-icon view-color">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                  <circle cx="12" cy="12" r="3"></circle>
+                </svg>
+              </div>
+              <div class="stat-meta">
+                <span class="stat-label">LƯỢT XEM</span>
+                <span id="stat-views" class="stat-number">--</span>
+                <span id="stat-views-raw" class="stat-sub">--</span>
+              </div>
+            </div>
+
+            <div class="stat-card card">
+              <div class="stat-icon like-color">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path>
+                </svg>
+              </div>
+              <div class="stat-meta">
+                <span class="stat-label">LƯỢT THÍCH</span>
+                <span id="stat-likes" class="stat-number">--</span>
+                <span id="stat-likes-raw" class="stat-sub">--</span>
+              </div>
+            </div>
+
+            <div class="stat-card card">
+              <div class="stat-icon comment-color">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"></path>
+                </svg>
+              </div>
+              <div class="stat-meta">
+                <span class="stat-label">BÌNH LUẬN</span>
+                <span id="stat-comments" class="stat-number">--</span>
+                <span id="stat-comments-raw" class="stat-sub">--</span>
+              </div>
+            </div>
+
+            <div class="stat-card card">
+              <div class="stat-icon ratio-color">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+                </svg>
+              </div>
+              <div class="stat-meta">
+                <span class="stat-label">TỶ LỆ THÍCH / XEM</span>
+                <span id="stat-like-ratio" class="stat-number">--</span>
+                <span class="stat-sub">Tỷ lệ tương tác ước tính</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card mt-4">
+            <h3 class="info-group-title">Định lượng thời gian phát</h3>
+            <div class="stats-time-grid">
+              <div class="time-box">
+                <span class="tb-label">Thời lượng giây</span>
+                <span id="stat-duration-sec" class="tb-val">--</span>
+              </div>
+              <div class="time-box">
+                <span class="tb-label">Thời lượng phút</span>
+                <span id="stat-duration-min" class="tb-val">--</span>
+              </div>
+              <div class="time-box">
+                <span class="tb-label">Độ phân giải lớn nhất</span>
+                <span id="stat-max-res" class="tb-val">--</span>
+              </div>
+              <div class="time-box">
+                <span class="tb-label">Tốc độ khung hình (FPS)</span>
+                <span id="stat-fps" class="tb-val">--</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. TAGS & SEO TAB -->
+        <div id="tab-tags" class="tab-panel">
+          <div class="card">
+            <h3 class="info-group-title">Danh mục (Categories)</h3>
+            <div id="categories-container" class="tags-container"></div>
+          </div>
+
+          <div class="card mt-4">
+            <div class="card-header-flex">
+              <div>
+                <h3 class="info-group-title mb-0">Thẻ từ khóa SEO (Tags)</h3>
+                <div class="tag-counter-wrap">
+                  <span>Tổng độ dài ký tự: </span>
+                  <strong id="tag-char-count">0</strong> / 500 ký tự
+                  <span id="tag-limit-badge" class="pill pill-accent">Hợp lệ</span>
+                </div>
+              </div>
+              <button id="copy-all-tags-btn" class="btn-secondary btn-sm">
+                📋 Sao chép tất cả tags (Chuẩn dán Studio)
+              </button>
+            </div>
+            <div id="tags-container" class="tags-container"></div>
+          </div>
+        </div>
+
+        <!-- 4. FORMATS TAB -->
+        <div id="tab-formats" class="tab-panel">
+          <div class="card">
+            <div class="card-header-flex">
+              <div>
+                <h3 class="info-group-title mb-0">Bảng định dạng Video & Audio chi tiết</h3>
+                <p class="section-desc">Danh sách toàn bộ các luồng (streams) phát hiện bởi yt-dlp</p>
+              </div>
+              <div class="format-actions-row">
+                <button id="export-formats-csv-btn" class="btn-secondary btn-sm">📊 Xuất bảng ra CSV</button>
+                <div class="format-filters">
+                  <button class="filter-btn active" data-filter="all">Tất cả</button>
+                  <button class="filter-btn" data-filter="video-audio">Video + Audio</button>
+                  <button class="filter-btn" data-filter="video-only">Video Chỉ</button>
+                  <button class="filter-btn" data-filter="audio-only">Audio Chỉ</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="table-responsive">
+              <table id="formats-table" class="data-table">
+                <thead>
+                  <tr>
+                    <th>Format ID</th>
+                    <th>Loại</th>
+                    <th>Định dạng</th>
+                    <th>Độ phân giải</th>
+                    <th>FPS</th>
+                    <th>Codecs</th>
+                    <th>Bitrate</th>
+                    <th>Dung lượng ước tính</th>
+                    <th>Thao tác</th>
+                  </tr>
+                </thead>
+                <tbody id="formats-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5. CHAPTERS TAB -->
+        <div id="tab-chapters" class="tab-panel">
+          <div class="card">
+            <div class="card-header-flex">
+              <div>
+                <h3 class="info-group-title mb-0">Danh sách các chương (Chapters)</h3>
+                <p class="section-desc">Các phân đoạn nội dung được người tạo video đánh dấu mốc thời gian</p>
+              </div>
+              <button id="copy-chapters-btn" class="btn-secondary btn-sm">
+                📋 Sao chép danh sách chương
+              </button>
+            </div>
+
+            <div id="chapters-list" class="chapters-container"></div>
+          </div>
+        </div>
+
+        <!-- 6. HEATMAP TAB -->
+        <div id="tab-heatmap" class="tab-panel">
+          <div class="card">
+            <div class="card-header-flex">
+              <div>
+                <h3 class="info-group-title mb-0">Biểu đồ đoạn cao trào (Most Replayed / Heatmap)</h3>
+                <p class="section-desc">Dữ liệu các đoạn khán giả tua lại xem nhiều nhất trong video</p>
+              </div>
+            </div>
+            <div id="heatmap-wrapper" class="heatmap-chart-wrapper">
+              <div id="heatmap-canvas-wrap"></div>
+              <p id="heatmap-empty-msg" class="hidden" style="color: var(--text-muted); padding: 20px; text-align: center;">Video này chưa có dữ liệu Heatmap từ YouTube.</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- 7. IN-APP PLAYER TAB -->
+        <div id="tab-player" class="tab-panel">
+          <div class="card">
+            <h3 class="info-group-title">Trình phát video trực tiếp trong app</h3>
+            <div class="player-iframe-wrapper">
+              <iframe id="in-app-video-frame" src="" frameborder="0" allowfullscreen allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"></iframe>
+            </div>
+          </div>
+        </div>
+
+        <!-- 8. DESCRIPTION TAB -->
+        <div id="tab-description" class="tab-panel">
+          <div class="card">
+            <div class="card-header-flex">
+              <h3 class="info-group-title mb-0">Nội dung mô tả (Description)</h3>
+              <div class="flex-actions">
+                <button id="copy-description-btn" class="btn-secondary btn-sm">📋 Sao chép mô tả</button>
+              </div>
+            </div>
+            <pre id="video-description-text" class="description-viewer"></pre>
+          </div>
+        </div>
+
+        <!-- 9. RAW JSON TAB -->
+        <div id="tab-json" class="tab-panel">
+          <div class="card">
+            <div class="card-header-flex">
+              <div>
+                <h3 class="info-group-title mb-0">Dữ liệu thô JSON đầy đủ</h3>
+                <p class="section-desc">Cấu trúc 100% dữ liệu gốc mà yt-dlp trích xuất được</p>
+              </div>
+              <div class="flex-actions">
+                <button id="copy-raw-json-btn" class="btn-secondary btn-sm">📋 Sao chép toàn bộ JSON</button>
+              </div>
+            </div>
+            <div class="json-viewer-wrapper">
+              <pre id="raw-json-code" class="code-block"></pre>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+
+  <!-- VIDEO COMPARISON MODAL -->
+  <div id="compare-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card compare-modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">⚔️ So sánh 2 Video Đối Đầu</h3>
+        <button id="close-compare-btn" class="icon-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="compare-inputs-grid">
+          <div>
+            <label class="compare-label">Video 1 (Hiện tại hoặc link mới):</label>
+            <input type="text" id="compare-url-1" class="compare-input" placeholder="Dán URL Video 1..." />
+          </div>
+          <div>
+            <label class="compare-label">Video 2 (Đối thủ / Cần so sánh):</label>
+            <input type="text" id="compare-url-2" class="compare-input" placeholder="Dán URL Video 2..." />
+          </div>
+        </div>
+        <div class="text-center mt-4">
+          <button id="execute-compare-btn" class="btn-primary">Bắt đầu so sánh</button>
+        </div>
+
+        <div id="compare-loading" class="hidden text-center mt-4">
+          <div class="spinner-pulse" style="width:30px; height:30px;"></div>
+          <p>Đang phân tích và đối sánh 2 video...</p>
+        </div>
+
+        <div id="compare-results" class="compare-results-wrap hidden mt-4">
+          <table class="data-table compare-table">
+            <thead>
+              <tr>
+                <th>Chỉ số</th>
+                <th id="comp-th-1">Video 1</th>
+                <th id="comp-th-2">Video 2</th>
+              </tr>
+            </thead>
+            <tbody id="compare-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HISTORY MODAL / DRAWER -->
+  <div id="history-modal" class="modal hidden">
+    <div class="modal-backdrop"></div>
+    <div class="modal-card">
+      <div class="modal-header">
+        <h3 class="modal-title">Lịch sử phân tích gần đây</h3>
+        <button id="close-history-btn" class="icon-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div id="history-list" class="history-list"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="clear-history-btn" class="btn-danger btn-sm">Xóa toàn bộ lịch sử</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TOAST NOTIFICATION -->
+  <div id="toast" class="toast hidden">
+    <span id="toast-message">Đã sao chép!</span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

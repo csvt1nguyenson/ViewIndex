@@ -1,0 +1,19 @@
+# Rust & Cargo
+/src-tauri/target/
+**/*.rs.bk
+
+# Executables & Installers
+*.exe
+*.msi
+*.part
+*.ytdl
+
+# Standalone heavy binaries (downloaded by CI in GitHub Actions)
+/src-tauri/bin/yt-dlp.exe
+/src-tauri/bin/ffmpeg.exe
+
+# Node & logs
+node_modules/
+npm-debug.log*
+*.log
+/scratch/

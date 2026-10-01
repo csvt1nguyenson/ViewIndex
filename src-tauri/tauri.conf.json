@@ -1,0 +1,52 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ViewIndex",
+  "version": "1.0.0",
+  "identifier": "com.viewindex.app",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "label": "main",
+        "title": "ViewIndex — YouTube Metadata & Analytics",
+        "width": 1220,
+        "height": 840,
+        "minWidth": 960,
+        "minHeight": 640,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false,
+        "visible": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDI0M0FEMERFNUVGNUU3OTQKUldTVTUvVmUzdEE2SlBLN2hPdWZLWWhDRCsrZjZLa3Q5M2dmVktYdm1EckkyTmJMTkw4L2htM0QK",
+      "endpoints": [
+        "https://github.com/csvt1nguyenson/ViewIndex/releases/latest/download/latest.json"
+      ]
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "resources": [
+      "bin/yt-dlp.exe",
+      "bin/ffmpeg.exe"
+    ]
+  }
+}
