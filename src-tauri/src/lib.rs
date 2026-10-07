@@ -1,8 +1,8 @@
-use std::process::{Command, Stdio};
+use serde::{Deserialize, Serialize};
+use std::io::{BufRead, BufReader};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
-use std::io::{BufRead, BufReader};
-use serde::{Deserialize, Serialize};
+use std::process::{Command, Stdio};
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
 
@@ -33,7 +33,9 @@ fn get_tool_path(name: &str) -> std::path::PathBuf {
 fn get_ffmpeg_dir() -> Option<String> {
     let ffmpeg_path = get_tool_path("ffmpeg");
     if ffmpeg_path.exists() {
-        ffmpeg_path.parent().map(|p| p.to_string_lossy().to_string())
+        ffmpeg_path
+            .parent()
+            .map(|p| p.to_string_lossy().to_string())
     } else {
         None
     }
@@ -57,6 +59,15 @@ pub struct ProgressPayload {
     pub is_done: bool,
     pub is_error: bool,
     pub file_path: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SubtitleBatchResult {
+    pub folder: String,
+    pub processed: usize,
+    pub downloaded: u32,
+    pub skipped: u32,
+    pub failed: u32,
 }
 
 #[tauri::command]
@@ -119,7 +130,11 @@ async fn update_ytdlp() -> Result<String, String> {
     let mut needs_pip = false;
 
     if let Ok(ref out) = output_u {
-        let text = format!("{} {}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+        let text = format!(
+            "{} {}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
         if out.status.success() {
             let ver = get_current_ytdlp_version();
             return Ok(format!("Cập nhật thành công lên bản: {}", ver));
@@ -161,36 +176,34 @@ async fn update_ytdlp() -> Result<String, String> {
 }
 
 #[tauri::command]
-async fn analyze_url(url: String, cookies_browser: Option<String>) -> Result<serde_json::Value, String> {
+async fn analyze_url(
+    url: String,
+    cookies_browser: Option<String>,
+) -> Result<serde_json::Value, String> {
     let trimmed_url = url.trim();
     if trimmed_url.is_empty() {
         return Err("Vui lòng nhập đường dẫn URL YouTube hợp lệ.".to_string());
     }
 
     let is_watch_video = trimmed_url.contains("/watch") || trimmed_url.contains("youtu.be/");
-    let is_playlist_or_channel = !is_watch_video && (
-        trimmed_url.contains("/@")
-        || trimmed_url.contains("/channel/")
-        || trimmed_url.contains("/c/")
-        || trimmed_url.contains("/playlist")
-        || trimmed_url.contains("/user/")
-    );
+    let is_playlist_or_channel = !is_watch_video
+        && (trimmed_url.contains("/@")
+            || trimmed_url.contains("/channel/")
+            || trimmed_url.contains("/c/")
+            || trimmed_url.contains("/playlist")
+            || trimmed_url.contains("/user/"));
 
     let mut cmd = Command::new(get_tool_path("yt-dlp"));
-    cmd.arg("--dump-single-json")
-       .arg("--no-warnings");
+    cmd.arg("--dump-single-json").arg("--no-warnings");
 
     if let Some(ffdir) = get_ffmpeg_dir() {
         cmd.arg("--ffmpeg-location").arg(&ffdir);
     }
 
     if is_playlist_or_channel {
-        cmd.arg("--flat-playlist")
-           .arg("--playlist-end")
-           .arg("60");
+        cmd.arg("--flat-playlist").arg("--playlist-end").arg("60");
     } else {
-        cmd.arg("--skip-download")
-           .arg("--no-playlist");
+        cmd.arg("--skip-download").arg("--no-playlist");
     }
 
     if let Some(browser) = cookies_browser {
@@ -234,8 +247,7 @@ async fn analyze_url(url: String, cookies_browser: Option<String>) -> Result<ser
 
 #[tauri::command]
 fn select_save_path(default_filename: String, filter_ext: String) -> Option<String> {
-    let mut dialog = rfd::FileDialog::new()
-        .set_file_name(&default_filename);
+    let mut dialog = rfd::FileDialog::new().set_file_name(&default_filename);
 
     if let Some(dl) = dirs::download_dir() {
         dialog = dialog.set_directory(&dl);
@@ -262,7 +274,9 @@ fn select_folder() -> Option<String> {
     if let Some(dl) = dirs::download_dir() {
         dialog = dialog.set_directory(&dl);
     }
-    dialog.pick_folder().map(|p| p.to_string_lossy().to_string())
+    dialog
+        .pick_folder()
+        .map(|p| p.to_string_lossy().to_string())
 }
 
 fn sanitize_filename(name: &str) -> String {
@@ -279,11 +293,14 @@ fn sanitize_filename(name: &str) -> String {
         .collect();
 
     let reserved = [
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
-        "COM8", "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
+        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
     ];
     let upper = cleaned.to_uppercase();
-    if reserved.iter().any(|&r| upper == r || upper.starts_with(&format!("{}.", r))) {
+    if reserved
+        .iter()
+        .any(|&r| upper == r || upper.starts_with(&format!("{}.", r)))
+    {
         format!("{}_safe", cleaned)
     } else if cleaned.is_empty() {
         "unnamed".to_string()
@@ -301,8 +318,7 @@ async fn download_all_thumbnails(
 ) -> Result<String, String> {
     let safe_channel = sanitize_filename(&channel_name);
     let target_dir = std::path::Path::new(&folder).join(&safe_channel);
-    std::fs::create_dir_all(&target_dir)
-        .map_err(|e| format!("Lỗi tạo thư mục: {}", e))?;
+    std::fs::create_dir_all(&target_dir).map_err(|e| format!("Lỗi tạo thư mục: {}", e))?;
 
     let total = videos.len();
     let mut downloaded: u32 = 0;
@@ -332,15 +348,172 @@ async fn download_all_thumbnails(
         }
 
         // Emit progress to frontend
-        let _ = app.emit("thumbnail-progress", serde_json::json!({
-            "current": idx + 1,
-            "total": total,
-            "downloaded": downloaded,
-            "filename": filename
-        }));
+        let _ = app.emit(
+            "thumbnail-progress",
+            serde_json::json!({
+                "current": idx + 1,
+                "total": total,
+                "downloaded": downloaded,
+                "filename": filename
+            }),
+        );
     }
 
     Ok(target_dir.to_string_lossy().to_string())
+}
+
+fn is_regular_video_for_subtitles(video: &serde_json::Value) -> bool {
+    let id = video["id"].as_str().unwrap_or("");
+    if id.is_empty() {
+        return false;
+    }
+
+    let duration = video["duration"].as_f64().unwrap_or(0.0);
+    if duration <= 0.0 || duration <= 180.0 {
+        return false;
+    }
+
+    let title = video["title"].as_str().unwrap_or("").to_lowercase();
+    let url = video["url"].as_str().unwrap_or("").to_lowercase();
+    let live_status = video["live_status"].as_str().unwrap_or("").to_lowercase();
+    let was_live = video["was_live"].as_bool().unwrap_or(false);
+
+    !was_live
+        && !live_status.contains("live")
+        && !url.contains("/live/")
+        && !url.contains("/shorts/")
+        && !title.contains("#shorts")
+        && !title.contains("[live]")
+}
+
+fn count_srt_files(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|entry| {
+                    entry
+                        .path()
+                        .extension()
+                        .and_then(|ext| ext.to_str())
+                        .map(|ext| ext.eq_ignore_ascii_case("srt"))
+                        .unwrap_or(false)
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
+#[tauri::command]
+async fn download_all_subtitles(
+    app: AppHandle,
+    folder: String,
+    channel_name: String,
+    videos: Vec<serde_json::Value>,
+    cookies_browser: Option<String>,
+) -> Result<SubtitleBatchResult, String> {
+    let safe_channel = sanitize_filename(&channel_name);
+    let target_dir = std::path::Path::new(&folder).join(format!("{} - SRT", safe_channel));
+    std::fs::create_dir_all(&target_dir).map_err(|e| format!("Lỗi tạo thư mục SRT: {}", e))?;
+
+    let regular_videos: Vec<&serde_json::Value> = videos
+        .iter()
+        .filter(|video| is_regular_video_for_subtitles(video))
+        .collect();
+    let total = regular_videos.len();
+    if total == 0 {
+        return Ok(SubtitleBatchResult {
+            folder: target_dir.to_string_lossy().to_string(),
+            processed: 0,
+            downloaded: 0,
+            skipped: videos.len() as u32,
+            failed: 0,
+        });
+    }
+
+    let mut downloaded: u32 = 0;
+    let mut failed: u32 = 0;
+
+    for (idx, video) in regular_videos.iter().enumerate() {
+        let id = video["id"].as_str().unwrap_or("");
+        let title = video["title"].as_str().unwrap_or("video");
+        let url = video["url"]
+            .as_str()
+            .map(|u| u.to_string())
+            .unwrap_or_else(|| format!("https://www.youtube.com/watch?v={}", id));
+
+        let safe_title = sanitize_filename(title);
+        let output_template = target_dir
+            .join(format!("{:03} - {} - {}.%(ext)s", idx + 1, safe_title, id))
+            .to_string_lossy()
+            .to_string();
+        let before_count = count_srt_files(&target_dir);
+
+        let mut cmd = Command::new(get_tool_path("yt-dlp"));
+        cmd.arg("--skip-download")
+            .arg("--write-sub")
+            .arg("--write-auto-sub")
+            .arg("--sub-format")
+            .arg("srt")
+            .arg("--sub-lang")
+            .arg("vi,en")
+            .arg("--convert-subs")
+            .arg("srt")
+            .arg("--no-playlist")
+            .arg("--ignore-errors")
+            .arg("-o")
+            .arg(&output_template);
+
+        if let Some(ffdir) = get_ffmpeg_dir() {
+            cmd.arg("--ffmpeg-location").arg(&ffdir);
+        }
+
+        if let Some(browser) = cookies_browser.as_ref() {
+            let b = browser.trim();
+            if !b.is_empty() && b != "none" {
+                cmd.arg("--cookies-from-browser").arg(b);
+            }
+        }
+
+        cmd.arg("--").arg(&url);
+
+        #[cfg(target_os = "windows")]
+        cmd.creation_flags(CREATE_NO_WINDOW);
+
+        match cmd.output() {
+            Ok(output) => {
+                let after_count = count_srt_files(&target_dir);
+                if output.status.success() && after_count > before_count {
+                    downloaded += 1;
+                } else {
+                    failed += 1;
+                }
+            }
+            Err(_) => failed += 1,
+        }
+
+        let current = idx + 1;
+        let skipped = videos.len().saturating_sub(total) as u32;
+        let _ = app.emit(
+            "subtitle-progress",
+            serde_json::json!({
+                "current": current,
+                "total": total,
+                "downloaded": downloaded,
+                "skipped": skipped,
+                "failed": failed,
+                "title": title
+            }),
+        );
+    }
+
+    Ok(SubtitleBatchResult {
+        folder: target_dir.to_string_lossy().to_string(),
+        processed: total,
+        downloaded,
+        skipped: videos.len().saturating_sub(total) as u32,
+        failed,
+    })
 }
 #[tauri::command]
 async fn download_media(
@@ -348,7 +521,7 @@ async fn download_media(
     url: String,
     kind: String,
     output_path: Option<String>,
-    cookies_browser: Option<String>
+    cookies_browser: Option<String>,
 ) -> Result<String, String> {
     let trimmed_url = url.trim();
     if trimmed_url.is_empty() {
@@ -392,35 +565,35 @@ async fn download_media(
             }
             "video_best" => {
                 cmd.arg("-f")
-                   .arg("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best")
-                   .arg("--merge-output-format")
-                   .arg("mp4");
+                    .arg("bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best")
+                    .arg("--merge-output-format")
+                    .arg("mp4");
             }
             "audio_mp3" => {
                 cmd.arg("-f")
-                   .arg("ba/b")
-                   .arg("-x")
-                   .arg("--audio-format")
-                   .arg("mp3")
-                   .arg("--audio-quality")
-                   .arg("320K");
+                    .arg("ba/b")
+                    .arg("-x")
+                    .arg("--audio-format")
+                    .arg("mp3")
+                    .arg("--audio-quality")
+                    .arg("320K");
             }
             "thumbnail" => {
                 cmd.arg("--skip-download")
-                   .arg("--write-thumbnail")
-                   .arg("--convert-thumbnails")
-                   .arg("png");
+                    .arg("--write-thumbnail")
+                    .arg("--convert-thumbnails")
+                    .arg("png");
                 if out_flag_path.to_lowercase().ends_with(".png") {
                     out_flag_path = out_flag_path[..out_flag_path.len() - 4].to_string();
                 }
             }
             kind if kind.starts_with("subtitles") => {
                 cmd.arg("--skip-download")
-                   .arg("--write-sub")
-                   .arg("--write-auto-sub")
-                   .arg("--sub-format")
-                   .arg("srt")
-                   .arg("--ignore-errors");
+                    .arg("--write-sub")
+                    .arg("--write-auto-sub")
+                    .arg("--sub-format")
+                    .arg("srt")
+                    .arg("--ignore-errors");
 
                 let langs = if kind.starts_with("subtitles:") {
                     kind.trim_start_matches("subtitles:").to_string()
@@ -460,7 +633,10 @@ async fn download_media(
         Err(e) => return Err(format!("Lỗi khi kích hoạt tiến trình tải về: {}", e)),
     };
 
-    let stdout = child.stdout.take().ok_or("Không thể đọc tiến trình stdout")?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or("Không thể đọc tiến trình stdout")?;
     let stderr = child.stderr.take();
 
     let stderr_handle = std::thread::spawn(move || {
@@ -476,22 +652,30 @@ async fn download_media(
     });
 
     // Initial progress event
-    let _ = app.emit("download-progress", ProgressPayload {
-        percent: 0.0,
-        speed: "--".to_string(),
-        eta: "--".to_string(),
-        total: "--".to_string(),
-        status: "Bắt đầu kết nối tải tệp...".to_string(),
-        is_done: false,
-        is_error: false,
-        file_path: target_file_path.clone(),
-    });
+    let _ = app.emit(
+        "download-progress",
+        ProgressPayload {
+            percent: 0.0,
+            speed: "--".to_string(),
+            eta: "--".to_string(),
+            total: "--".to_string(),
+            status: "Bắt đầu kết nối tải tệp...".to_string(),
+            is_done: false,
+            is_error: false,
+            file_path: target_file_path.clone(),
+        },
+    );
 
     let reader = BufReader::new(stdout);
     for line in reader.lines().flatten() {
         let trimmed = line.trim();
         if trimmed.contains("PROGRESS:") {
-            let parts: Vec<&str> = trimmed.split("PROGRESS:").nth(1).unwrap_or("").split('|').collect();
+            let parts: Vec<&str> = trimmed
+                .split("PROGRESS:")
+                .nth(1)
+                .unwrap_or("")
+                .split('|')
+                .collect();
             if parts.len() >= 4 {
                 let pct_str = parts[0].replace('%', "").trim().to_string();
                 let pct = pct_str.parse::<f32>().unwrap_or(0.0);
@@ -499,43 +683,54 @@ async fn download_media(
                 let eta = parts[2].trim().to_string();
                 let total = parts[3].trim().to_string();
 
-                let _ = app.emit("download-progress", ProgressPayload {
-                    percent: pct,
-                    speed,
-                    eta,
-                    total,
-                    status: format!("Đang tải về: {:.1}%", pct),
+                let _ = app.emit(
+                    "download-progress",
+                    ProgressPayload {
+                        percent: pct,
+                        speed,
+                        eta,
+                        total,
+                        status: format!("Đang tải về: {:.1}%", pct),
+                        is_done: false,
+                        is_error: false,
+                        file_path: target_file_path.clone(),
+                    },
+                );
+            }
+        } else if trimmed.contains("[Merger]") || trimmed.contains("Merging") {
+            let _ = app.emit(
+                "download-progress",
+                ProgressPayload {
+                    percent: 98.0,
+                    speed: "--".to_string(),
+                    eta: "--".to_string(),
+                    total: "--".to_string(),
+                    status: "Đang ghép video và âm thanh qua ffmpeg...".to_string(),
                     is_done: false,
                     is_error: false,
                     file_path: target_file_path.clone(),
-                });
-            }
-        } else if trimmed.contains("[Merger]") || trimmed.contains("Merging") {
-            let _ = app.emit("download-progress", ProgressPayload {
-                percent: 98.0,
-                speed: "--".to_string(),
-                eta: "--".to_string(),
-                total: "--".to_string(),
-                status: "Đang ghép video và âm thanh qua ffmpeg...".to_string(),
-                is_done: false,
-                is_error: false,
-                file_path: target_file_path.clone(),
-            });
+                },
+            );
         } else if trimmed.contains("[ExtractAudio]") {
-            let _ = app.emit("download-progress", ProgressPayload {
-                percent: 98.0,
-                speed: "--".to_string(),
-                eta: "--".to_string(),
-                total: "--".to_string(),
-                status: "Đang chuyển đổi sang định dạng MP3 320kbps...".to_string(),
-                is_done: false,
-                is_error: false,
-                file_path: target_file_path.clone(),
-            });
+            let _ = app.emit(
+                "download-progress",
+                ProgressPayload {
+                    percent: 98.0,
+                    speed: "--".to_string(),
+                    eta: "--".to_string(),
+                    total: "--".to_string(),
+                    status: "Đang chuyển đổi sang định dạng MP3 320kbps...".to_string(),
+                    is_done: false,
+                    is_error: false,
+                    file_path: target_file_path.clone(),
+                },
+            );
         }
     }
 
-    let _status = child.wait().map_err(|e| format!("Lỗi khi chờ tiến trình hoàn tất: {}", e))?;
+    let _status = child
+        .wait()
+        .map_err(|e| format!("Lỗi khi chờ tiến trình hoàn tất: {}", e))?;
     let err_output = stderr_handle.join().unwrap_or_default();
 
     let resolved = resolve_actual_file_path(&target_file_path);
@@ -546,38 +741,47 @@ async fn download_media(
 
         // If user specifically requested an .srt file and yt-dlp produced an .en.srt / .vi.srt file:
         // Automatically rename it to the exact target_file_path if target_file_path does not exist!
-        if target_file_path.to_lowercase().ends_with(".srt") && !std::path::Path::new(&target_file_path).exists() {
+        if target_file_path.to_lowercase().ends_with(".srt")
+            && !std::path::Path::new(&target_file_path).exists()
+        {
             if std::fs::rename(&final_path, &target_file_path).is_ok() {
                 final_path = target_file_path.clone();
             }
         }
 
-        let _ = app.emit("download-progress", ProgressPayload {
-            percent: 100.0,
-            speed: "--".to_string(),
-            eta: "00:00".to_string(),
-            total: "100%".to_string(),
-            status: "Tải về hoàn tất thành công!".to_string(),
-            is_done: true,
-            is_error: false,
-            file_path: final_path.clone(),
-        });
+        let _ = app.emit(
+            "download-progress",
+            ProgressPayload {
+                percent: 100.0,
+                speed: "--".to_string(),
+                eta: "00:00".to_string(),
+                total: "100%".to_string(),
+                status: "Tải về hoàn tất thành công!".to_string(),
+                is_done: true,
+                is_error: false,
+                file_path: final_path.clone(),
+            },
+        );
         Ok(format!("Đã tải thành công về: {}", final_path))
     } else {
-        let _ = app.emit("download-progress", ProgressPayload {
-            percent: 0.0,
-            speed: "--".to_string(),
-            eta: "--".to_string(),
-            total: "--".to_string(),
-            status: "Tải về thất bại (Không tạo được tệp)!".to_string(),
-            is_done: true,
-            is_error: true,
-            file_path: target_file_path.clone(),
-        });
+        let _ = app.emit(
+            "download-progress",
+            ProgressPayload {
+                percent: 0.0,
+                speed: "--".to_string(),
+                eta: "--".to_string(),
+                total: "--".to_string(),
+                status: "Tải về thất bại (Không tạo được tệp)!".to_string(),
+                is_done: true,
+                is_error: true,
+                file_path: target_file_path.clone(),
+            },
+        );
         let msg = if err_output.contains("HTTP Error 429") {
             "YouTube giới hạn tải phụ đề (HTTP 429). Video này không có phụ đề khả dụng vào lúc này.".to_string()
         } else if kind.starts_with("subtitles") {
-            "Không thể tìm thấy hoặc tải phụ đề cho video này (YouTube không có phụ đề khả dụng).".to_string()
+            "Không thể tìm thấy hoặc tải phụ đề cho video này (YouTube không có phụ đề khả dụng)."
+                .to_string()
         } else if err_output.trim().is_empty() {
             "yt-dlp không thể tạo tệp tải về.".to_string()
         } else {
@@ -609,7 +813,10 @@ fn resolve_actual_file_path(path: &str) -> Option<String> {
                 // Prefer candidate matching target extension
                 if let Some(ext) = p.extension().and_then(|e| e.to_str()) {
                     let dot_ext = format!(".{}", ext.to_lowercase());
-                    if let Some(matched) = candidates.iter().find(|c| c.to_lowercase().ends_with(&dot_ext)) {
+                    if let Some(matched) = candidates
+                        .iter()
+                        .find(|c| c.to_lowercase().ends_with(&dot_ext))
+                    {
                         return Some(matched.clone());
                     }
                 }
@@ -630,7 +837,8 @@ fn open_file(path: String) -> Result<(), String> {
         #[cfg(target_os = "windows")]
         cmd.creation_flags(CREATE_NO_WINDOW);
 
-        cmd.spawn().map_err(|e| format!("Không thể mở tệp: {}", e))?;
+        cmd.spawn()
+            .map_err(|e| format!("Không thể mở tệp: {}", e))?;
         Ok(())
     } else {
         Err("Tệp không tồn tại hoặc đã bị di chuyển.".to_string())
@@ -665,7 +873,8 @@ fn open_file_folder(path: String) -> Result<(), String> {
         cmd.arg(parent);
     }
 
-    cmd.spawn().map_err(|e| format!("Không thể mở thư mục: {}", e))?;
+    cmd.spawn()
+        .map_err(|e| format!("Không thể mở thư mục: {}", e))?;
     Ok(())
 }
 
@@ -707,7 +916,9 @@ async fn check_app_update(app: AppHandle) -> Result<Option<String>, String> {
 async fn apply_app_update(app: AppHandle) -> Result<(), String> {
     if let Ok(updater) = app.updater() {
         if let Ok(Some(update)) = updater.check().await {
-            update.download_and_install(|_downloaded, _total| {}, || {}).await
+            update
+                .download_and_install(|_downloaded, _total| {}, || {})
+                .await
                 .map_err(|e| format!("Lỗi tải cài đặt bản cập nhật: {}", e))?;
             app.restart();
         }
@@ -743,6 +954,7 @@ pub fn run() {
             select_folder,
             download_media,
             download_all_thumbnails,
+            download_all_subtitles,
             open_file,
             open_file_folder,
             open_file_path,

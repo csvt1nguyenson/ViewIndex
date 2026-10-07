@@ -413,6 +413,7 @@ function initEventListeners() {
     }
   });
   document.getElementById('channel-export-csv-btn').addEventListener('click', exportChannelVideosCsv);
+  document.getElementById('channel-dl-srt-btn').addEventListener('click', downloadAllSubtitles);
 
   // Sort by views
   const thViews = document.getElementById('th-views');
@@ -433,6 +434,17 @@ function initEventListeners() {
       statusEl.classList.remove('hidden');
       textEl.textContent = `${d.current}/${d.total}`;
       barEl.style.width = `${Math.round((d.current / d.total) * 100)}%`;
+    });
+
+    window.__TAURI__.event.listen('subtitle-progress', (event) => {
+      const d = event.payload;
+      const statusEl = document.getElementById('srt-dl-status');
+      const textEl = document.getElementById('srt-dl-text');
+      const barEl = document.getElementById('srt-dl-bar');
+      statusEl.classList.remove('hidden');
+      const total = d.total || 1;
+      textEl.textContent = `${d.current}/${d.total} | SRT: ${d.downloaded} | Bỏ qua: ${d.skipped}`;
+      barEl.style.width = `${Math.round((d.current / total) * 100)}%`;
     });
   }
 
@@ -697,6 +709,7 @@ function renderChannelData(data) {
   channelSortField = null;
   channelSortDir = 'desc';
   document.getElementById('thumb-dl-status').classList.add('hidden');
+  document.getElementById('srt-dl-status').classList.add('hidden');
 
   document.getElementById('channel-title-text').textContent = data.title || data.channel || 'Kênh YouTube';
   document.getElementById('channel-uploader-id').textContent = data.uploader_id || data.id || '';
@@ -781,6 +794,19 @@ function escapeHtml(str) {
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
+}
+
+function getRegularChannelVideos() {
+  return (currentChannelVideos || []).filter(v => {
+    const duration = Number(v.duration || 0);
+    const title = (v.title || '').toLowerCase();
+    const url = (v.url || v.webpage_url || '').toLowerCase();
+    const liveStatus = (v.live_status || '').toLowerCase();
+    const wasLive = Boolean(v.was_live);
+    const isLive = wasLive || liveStatus.includes('live') || url.includes('/live/') || title.includes('[live]');
+    const isShort = url.includes('/shorts/') || title.includes('#shorts') || (duration > 0 && duration <= 180);
+    return v.id && duration > 0 && !isLive && !isShort;
+  });
 }
 
 function renderChannelVideosTable(videos) {
@@ -924,6 +950,71 @@ async function downloadAllThumbnails() {
     btn.textContent = '📥 Tải Thumbnail';
     document.getElementById('thumb-dl-status').classList.add('hidden');
     showToast("Lỗi tải thumbnail: " + err, true);
+  }
+}
+
+// Download SRT subtitles for regular channel videos only, excluding livestreams and shorts.
+async function downloadAllSubtitles() {
+  const regularVideos = getRegularChannelVideos();
+  if (regularVideos.length === 0) {
+    showToast("Không có video thường nào để xuất SRT (đã bỏ qua livestream/short).", true);
+    return;
+  }
+
+  try {
+    const folder = await callTauri('select_folder');
+    if (!folder) return;
+
+    const channelName = sanitizeFilename(
+      currentData?.title || currentData?.channel || 'YouTube_Channel'
+    );
+
+    const btn = document.getElementById('channel-dl-srt-btn');
+    btn.disabled = true;
+    btn.textContent = '⏳ Đang xuất SRT...';
+
+    const statusEl = document.getElementById('srt-dl-status');
+    const textEl = document.getElementById('srt-dl-text');
+    const barEl = document.getElementById('srt-dl-bar');
+    statusEl.classList.remove('hidden');
+    textEl.textContent = `0/${regularVideos.length}`;
+    barEl.style.width = '0%';
+
+    const videoList = regularVideos.map(v => ({
+      id: v.id || '',
+      title: v.title || 'video',
+      duration: v.duration || 0,
+      url: v.url || v.webpage_url || `https://www.youtube.com/watch?v=${v.id}`,
+      live_status: v.live_status || '',
+      was_live: Boolean(v.was_live)
+    }));
+
+    const result = await callTauri('download_all_subtitles', {
+      folder: folder,
+      channelName: channelName,
+      videos: videoList,
+      cookiesBrowser: cookieSelect.value !== 'none' ? cookieSelect.value : null
+    });
+
+    btn.disabled = false;
+    btn.textContent = '💬 Xuất SRT Video';
+    barEl.style.width = '100%';
+    textEl.textContent = `✅ SRT: ${result.downloaded}/${result.processed} | Bỏ qua: ${result.skipped}`;
+
+    showToast(`Đã xuất ${result.downloaded} file SRT vào: ${result.folder}`);
+    setTimeout(() => {
+      statusEl.classList.add('hidden');
+    }, 5000);
+
+    if (result.folder) {
+      callTauri('open_file_folder', { path: result.folder + '\\dummy.srt' }).catch(() => {});
+    }
+  } catch (err) {
+    const btn = document.getElementById('channel-dl-srt-btn');
+    btn.disabled = false;
+    btn.textContent = '💬 Xuất SRT Video';
+    document.getElementById('srt-dl-status').classList.add('hidden');
+    showToast("Lỗi xuất SRT: " + err, true);
   }
 }
 
