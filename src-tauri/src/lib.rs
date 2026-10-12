@@ -175,6 +175,68 @@ async fn update_ytdlp() -> Result<String, String> {
     Ok(format!("yt-dlp hiện tại là phiên bản: {}", ver))
 }
 
+fn format_ytdlp_error(raw_err: &str) -> String {
+    let lower = raw_err.to_lowercase();
+
+    // 1. Video deleted / removed / private / unavailable (yt-dlp often misleadingly prints bot/cookies error for these)
+    if lower.contains("video unavailable")
+        || lower.contains("this video is unavailable")
+        || lower.contains("this video has been removed")
+        || lower.contains("private video")
+        || lower.contains("sign in to confirm you're not a bot")
+        || lower.contains("sign in to confirm you’re not a bot")
+    {
+        return "Video không khả dụng (Video này đã bị chủ kênh xóa, bị ẩn hoặc đang đặt ở chế độ Riêng tư trên YouTube).".to_string();
+    }
+
+    // 2. Cookie decryption failure on Windows (App-Bound Encryption / DPAPI)
+    if lower.contains("failed to decrypt with dpapi") || lower.contains("dpapi") {
+        return "Không thể giải mã Cookie từ trình duyệt này (do bảo mật Windows). Vui lòng chọn 'Không dùng cookies' hoặc đóng trình duyệt trước khi thử lại.".to_string();
+    }
+
+    // 3. Rate limiting / HTTP 429
+    if lower.contains("429") || lower.contains("too many requests") {
+        return "YouTube đang tạm thời giới hạn tần suất yêu cầu (HTTP 429: Too Many Requests). Vui lòng thử lại sau ít phút.".to_string();
+    }
+
+    // 4. Channel or Playlist not found
+    if lower.contains("not found")
+        || lower.contains("unable to extract channel")
+        || lower.contains("does not exist")
+    {
+        return "Không tìm thấy dữ liệu. Kênh hoặc Danh sách phát này không tồn tại hoặc đã bị đổi tên/xóa.".to_string();
+    }
+
+    // 5. Invalid URL / ID
+    if lower.contains("incomplete youtube id") || lower.contains("does not look like a valid") {
+        return "Đường dẫn không hợp lệ. Vui lòng kiểm tra lại link YouTube đã nhập.".to_string();
+    }
+
+    // 6. Network connection error
+    if lower.contains("temporary failure in name resolution")
+        || lower.contains("network is unreachable")
+        || lower.contains("connection refused")
+        || lower.contains("timed out")
+        || lower.contains("failed to establish a new connection")
+    {
+        return "Lỗi kết nối mạng: Không thể kết nối tới máy chủ YouTube. Vui lòng kiểm tra lại Internet.".to_string();
+    }
+
+    // Fallback: clean up yt-dlp technical prefixes if any
+    let cleaned = raw_err
+        .lines()
+        .filter(|l| l.contains("ERROR:") || !l.trim().is_empty())
+        .map(|l| l.trim_start_matches("ERROR:").trim())
+        .collect::<Vec<_>>()
+        .join(" ");
+
+    if cleaned.trim().is_empty() {
+        "Không thể phân tích dữ liệu từ YouTube. Vui lòng thử lại sau.".to_string()
+    } else {
+        cleaned
+    }
+}
+
 #[tauri::command]
 async fn analyze_url(
     url: String,
@@ -230,12 +292,7 @@ async fn analyze_url(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        let err_msg = if stderr.trim().is_empty() {
-            format!("yt-dlp kết thúc với mã lỗi: {:?}", output.status.code())
-        } else {
-            stderr.trim().to_string()
-        };
-        return Err(err_msg);
+        return Err(format_ytdlp_error(&stderr));
     }
 
     let stdout_str = String::from_utf8_lossy(&output.stdout);
@@ -785,7 +842,7 @@ async fn download_media(
         } else if err_output.trim().is_empty() {
             "yt-dlp không thể tạo tệp tải về.".to_string()
         } else {
-            err_output.trim().to_string()
+            format_ytdlp_error(&err_output)
         };
         Err(msg)
     }

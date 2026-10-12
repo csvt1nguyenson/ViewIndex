@@ -1764,7 +1764,8 @@ function setLoading(isLoading, customTitle = null) {
 }
 
 function showError(msg) {
-  errorMessage.textContent = msg;
+  let cleanMsg = msg ? msg.toString().replace(/^Error:\s*/i, '').trim() : "Đã xảy ra lỗi khi phân tích dữ liệu.";
+  errorMessage.textContent = cleanMsg;
   errorBanner.classList.remove('hidden');
   emptyState.classList.remove('hidden');
 }
