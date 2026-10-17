@@ -922,18 +922,18 @@ async function downloadAllThumbnails() {
       title: v.title || 'video'
     }));
 
-    const resultPath = await callTauri('download_all_thumbnails', {
+    const result = await callTauri('download_all_thumbnails', {
       folder: folder,
       channelName: channelName,
       videos: videoList
     });
 
     btn.disabled = false;
-    btn.textContent = '📥 Tải Thumbnail';
+    btn.textContent = '📥 Tải tất cả Thumbnail HD';
     barEl.style.width = '100%';
-    textEl.textContent = `✅ ${currentChannelVideos.length}/${currentChannelVideos.length}`;
+    textEl.textContent = `${result.downloaded}/${result.total} ảnh HD | Không tải được: ${result.failed}`;
 
-    showToast(`Đã tải xong tất cả thumbnail vào: ${resultPath}`);
+    showToast(`Đã tải ${result.downloaded} ảnh maxresdefault HD. Không tải được: ${result.failed} (không có ảnh HD hoặc lỗi tải).`, result.failed > 0);
 
     // After 3 seconds hide progress and offer to open folder
     setTimeout(() => {
@@ -941,13 +941,13 @@ async function downloadAllThumbnails() {
     }, 4000);
 
     // Open the folder
-    if (resultPath) {
-      callTauri('open_file_folder', { path: resultPath + '\\dummy.jpg' }).catch(() => {});
+    if (result.folder) {
+      callTauri('open_file_folder', { path: result.folder + '\\dummy.jpg' }).catch(() => {});
     }
   } catch (err) {
     const btn = document.getElementById('channel-dl-thumbnails-btn');
     btn.disabled = false;
-    btn.textContent = '📥 Tải Thumbnail';
+    btn.textContent = '📥 Tải tất cả Thumbnail HD';
     document.getElementById('thumb-dl-status').classList.add('hidden');
     showToast("Lỗi tải thumbnail: " + err, true);
   }

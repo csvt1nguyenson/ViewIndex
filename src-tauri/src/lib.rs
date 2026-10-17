@@ -263,7 +263,7 @@ async fn analyze_url(
     }
 
     if is_playlist_or_channel {
-        cmd.arg("--flat-playlist").arg("--playlist-end").arg("60");
+        cmd.arg("--flat-playlist");
     } else {
         cmd.arg("--skip-download").arg("--no-playlist");
     }
@@ -366,57 +366,102 @@ fn sanitize_filename(name: &str) -> String {
     }
 }
 
+#[derive(serde::Serialize)]
+struct ThumbnailBatchResult {
+    folder: String,
+    downloaded: u32,
+    failed: usize,
+    total: usize,
+}
+
 #[tauri::command]
 async fn download_all_thumbnails(
     app: AppHandle,
     folder: String,
     channel_name: String,
     videos: Vec<serde_json::Value>,
-) -> Result<String, String> {
-    let safe_channel = sanitize_filename(&channel_name);
-    let target_dir = std::path::Path::new(&folder).join(&safe_channel);
-    std::fs::create_dir_all(&target_dir).map_err(|e| format!("Lỗi tạo thư mục: {}", e))?;
+) -> Result<ThumbnailBatchResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let safe_channel = sanitize_filename(&channel_name);
+        let target_dir = std::path::Path::new(&folder).join(&safe_channel);
+        std::fs::create_dir_all(&target_dir).map_err(|e| format!("Lỗi tạo thư mục: {}", e))?;
 
-    let total = videos.len();
-    let mut downloaded: u32 = 0;
+        let total = videos.len();
+        let mut downloaded: u32 = 0;
 
-    for (idx, video) in videos.iter().enumerate() {
-        let id = video["id"].as_str().unwrap_or("");
-        let title = video["title"].as_str().unwrap_or("video");
-        if id.is_empty() {
-            continue;
-        }
-
-        let url = format!("https://i.ytimg.com/vi/{}/hqdefault.jpg", id);
-        let safe_title = sanitize_filename(title);
-        let filename = format!("{:03} - {}.jpg", idx + 1, safe_title);
-        let filepath = target_dir.join(&filename);
-
-        // Download using curl (built-in on Windows 10+)
-        let mut cmd = Command::new("curl");
-        cmd.args(["-L", "-s", "-o", &filepath.to_string_lossy(), &url]);
-        #[cfg(target_os = "windows")]
-        cmd.creation_flags(CREATE_NO_WINDOW);
-
-        if let Ok(output) = cmd.output() {
-            if output.status.success() && filepath.exists() {
-                downloaded += 1;
+        for (idx, video) in videos.iter().enumerate() {
+            let id = video["id"].as_str().unwrap_or("");
+            let title = video["title"].as_str().unwrap_or("video");
+            if id.is_empty() {
+                continue;
             }
+
+            if id.len() != 11
+                || !id
+                    .bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+            {
+                continue;
+            }
+            let url = format!("https://i.ytimg.com/vi/{}/maxresdefault.jpg", id);
+            let safe_title = sanitize_filename(title);
+            let filename = format!("{:03} - {} - {}.jpg", idx + 1, safe_title, id);
+            let filepath = target_dir.join(&filename);
+            let temporary_path = filepath.with_extension("jpg.part");
+
+            // Download using curl (built-in on Windows 10+)
+            let mut cmd = Command::new("curl");
+            cmd.args([
+                "--fail",
+                "--location",
+                "--silent",
+                "--show-error",
+                "--connect-timeout",
+                "15",
+                "--max-time",
+                "60",
+                "--retry",
+                "2",
+                "-o",
+                &temporary_path.to_string_lossy(),
+                &url,
+            ]);
+            #[cfg(target_os = "windows")]
+            cmd.creation_flags(CREATE_NO_WINDOW);
+
+            if let Ok(output) = cmd.output() {
+                if output.status.success()
+                    && std::fs::metadata(&temporary_path)
+                        .map(|m| m.len() > 0)
+                        .unwrap_or(false)
+                    && std::fs::rename(&temporary_path, &filepath).is_ok()
+                {
+                    downloaded += 1;
+                }
+            }
+            let _ = std::fs::remove_file(&temporary_path);
+
+            // Emit progress to frontend
+            let _ = app.emit(
+                "thumbnail-progress",
+                serde_json::json!({
+                    "current": idx + 1,
+                    "total": total,
+                    "downloaded": downloaded,
+                    "filename": filename
+                }),
+            );
         }
 
-        // Emit progress to frontend
-        let _ = app.emit(
-            "thumbnail-progress",
-            serde_json::json!({
-                "current": idx + 1,
-                "total": total,
-                "downloaded": downloaded,
-                "filename": filename
-            }),
-        );
-    }
-
-    Ok(target_dir.to_string_lossy().to_string())
+        Ok(ThumbnailBatchResult {
+            folder: target_dir.to_string_lossy().to_string(),
+            downloaded,
+            failed: total - downloaded as usize,
+            total,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 fn is_regular_video_for_subtitles(video: &serde_json::Value) -> bool {
