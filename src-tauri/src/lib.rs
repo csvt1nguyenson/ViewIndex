@@ -3,8 +3,13 @@ use std::io::{BufRead, BufReader};
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_updater::UpdaterExt;
+
+static AUDIT_PID: Mutex<Option<u32>> = Mutex::new(None);
+static AUDIT_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -617,6 +622,596 @@ async fn download_all_subtitles(
         failed,
     })
 }
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ChannelAuditOptions {
+    pub channel_url: String,
+    pub target_folder: Option<String>,
+    pub tabs: Vec<String>,
+    pub limit: usize,
+    pub download_subs: bool,
+    pub download_comments: bool,
+    pub download_thumbnails: bool,
+    pub anti_bot_delay: bool,
+    pub cookies_browser: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct ChannelAuditResult {
+    pub folder: String,
+    pub csv_file: String,
+    pub channel_json: String,
+    pub ai_transcripts_file: String,
+    pub total_crawled: usize,
+    pub videos_count: usize,
+    pub shorts_count: usize,
+    pub streams_count: usize,
+    pub total_views: u64,
+    pub total_likes: u64,
+    pub total_comments: u64,
+    pub channel_title: String,
+    pub channel_subscribers: String,
+    pub sample_videos: Vec<serde_json::Value>,
+}
+
+fn clean_channel_base_url(raw: &str) -> String {
+    let mut s = raw.trim().to_string();
+    if let Some(idx) = s.find('?') {
+        s.truncate(idx);
+    }
+    if let Some(idx) = s.find('#') {
+        s.truncate(idx);
+    }
+    s = s.trim_end_matches('/').to_string();
+
+    if !s.starts_with("http://") && !s.starts_with("https://") {
+        if s.starts_with('@') {
+            s = format!("https://www.youtube.com/{}", s);
+        } else if s.starts_with("channel/") || s.starts_with("c/") || s.starts_with("user/") {
+            s = format!("https://www.youtube.com/{}", s);
+        } else if s.starts_with("UC") && s.len() >= 24 {
+            s = format!("https://www.youtube.com/channel/{}", s);
+        } else {
+            s = format!("https://www.youtube.com/@{}", s);
+        }
+    }
+
+    let suffixes = [
+        "/videos",
+        "/shorts",
+        "/streams",
+        "/featured",
+        "/community",
+        "/playlists",
+        "/live",
+    ];
+    for suffix in suffixes {
+        if s.ends_with(suffix) {
+            s.truncate(s.len() - suffix.len());
+            break;
+        }
+    }
+    s
+}
+
+fn clean_vtt_to_plain_text(content: &str) -> String {
+    let mut lines = Vec::new();
+    let mut prev_line = String::new();
+
+    for raw_line in content.lines() {
+        let line = raw_line.trim();
+        if line.is_empty()
+            || line.starts_with("WEBVTT")
+            || line.starts_with("Kind:")
+            || line.starts_with("Language:")
+            || line.contains("-->")
+            || line.chars().all(|c| c.is_ascii_digit())
+        {
+            continue;
+        }
+        let mut clean = String::new();
+        let mut in_tag = false;
+        for ch in line.chars() {
+            if ch == '<' {
+                in_tag = true;
+            } else if ch == '>' {
+                in_tag = false;
+            } else if !in_tag {
+                clean.push(ch);
+            }
+        }
+        let clean = clean.trim();
+        if !clean.is_empty() && clean != prev_line {
+            lines.push(clean.to_string());
+            prev_line = clean.to_string();
+        }
+    }
+
+    lines.join(" ")
+}
+
+fn escape_csv_cell(val: &str) -> String {
+    let escaped = val
+        .replace('"', "\"\"")
+        .replace('\r', " ")
+        .replace('\n', " ");
+    format!("\"{}\"", escaped)
+}
+
+fn format_duration_hms(secs: u64) -> String {
+    let hours = secs / 3600;
+    let mins = (secs % 3600) / 60;
+    let s = secs % 60;
+    if hours > 0 {
+        format!("{:02}:{:02}:{:02}", hours, mins, s)
+    } else {
+        format!("{:02}:{:02}", mins, s)
+    }
+}
+
+fn get_simple_timestamp() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    secs.to_string()
+}
+
+#[tauri::command]
+fn cancel_channel_audit() -> Result<(), String> {
+    AUDIT_CANCELLED.store(true, Ordering::SeqCst);
+    if let Ok(guard) = AUDIT_PID.lock() {
+        if let Some(pid) = *guard {
+            #[cfg(target_os = "windows")]
+            {
+                let _ = Command::new("taskkill")
+                    .args(["/F", "/T", "/PID", &pid.to_string()])
+                    .creation_flags(CREATE_NO_WINDOW)
+                    .output();
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                let _ = Command::new("kill").args(["-9", &pid.to_string()]).output();
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn start_channel_audit(
+    app: AppHandle,
+    options: ChannelAuditOptions,
+) -> Result<ChannelAuditResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        AUDIT_CANCELLED.store(false, Ordering::SeqCst);
+
+        let raw_url = options.channel_url.trim();
+        if raw_url.is_empty() {
+            return Err("Vui lòng nhập đường dẫn kênh YouTube hợp lệ.".to_string());
+        }
+
+        let base_url = clean_channel_base_url(raw_url);
+        let selected_tabs = if options.tabs.is_empty() {
+            vec!["videos".to_string()]
+        } else {
+            options.tabs.clone()
+        };
+
+        let _ = app.emit(
+            "channel-audit-progress",
+            serde_json::json!({
+                "phase": "init",
+                "percent": 3,
+                "message": format!("Đang kết nối tới kênh: {}", base_url)
+            }),
+        );
+
+        let mut info_cmd = Command::new(get_tool_path("yt-dlp"));
+        info_cmd.args(["-J", "--flat-playlist", "--playlist-end", "1", "--no-warnings"]);
+        if let Some(ffdir) = get_ffmpeg_dir() {
+            info_cmd.arg("--ffmpeg-location").arg(&ffdir);
+        }
+        if let Some(ref browser) = options.cookies_browser {
+            let b = browser.trim();
+            if !b.is_empty() && b != "none" {
+                info_cmd.arg("--cookies-from-browser").arg(b);
+            }
+        }
+        info_cmd.arg(format!("{}/videos", base_url.trim_end_matches('/')));
+        #[cfg(target_os = "windows")]
+        info_cmd.creation_flags(CREATE_NO_WINDOW);
+
+        let info_output = info_cmd.output().map_err(|e| format!("Không thể chạy yt-dlp lấy thông tin kênh: {}", e))?;
+        let info_stdout = String::from_utf8_lossy(&info_output.stdout);
+        let channel_info: serde_json::Value = serde_json::from_str(&info_stdout).unwrap_or(serde_json::json!({}));
+
+        let channel_title = channel_info["channel"]
+            .as_str()
+            .or_else(|| channel_info["uploader"].as_str())
+            .or_else(|| channel_info["title"].as_str())
+            .unwrap_or("Kenh_YouTube")
+            .to_string();
+
+        let channel_subs = if let Some(subs) = channel_info["channel_follower_count"].as_u64() {
+            format!("{} subs", subs)
+        } else {
+            "N/A".to_string()
+        };
+
+        let safe_name = sanitize_filename(&channel_title);
+        let timestamp = get_simple_timestamp();
+        let target_dir = match &options.target_folder {
+            Some(f) if !f.trim().is_empty() => std::path::PathBuf::from(f),
+            _ => {
+                let dl = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("."));
+                dl.join("ViewIndex_Audit").join(format!("{}_{}", safe_name, timestamp))
+            }
+        };
+
+        std::fs::create_dir_all(&target_dir).map_err(|e| format!("Lỗi tạo thư mục đích: {}", e))?;
+
+        let channel_json_path = target_dir.join("channel.json");
+        let _ = std::fs::write(&channel_json_path, serde_json::to_string_pretty(&channel_info).unwrap_or_default());
+
+        let _ = app.emit(
+            "channel-audit-progress",
+            serde_json::json!({
+                "phase": "channel_ready",
+                "percent": 8,
+                "message": format!("Đã nhận diện kênh '{}' ({}). Đang chuẩn bị quét...", channel_title, channel_subs)
+            }),
+        );
+
+        let tab_count = selected_tabs.len();
+        for (tab_idx, tab) in selected_tabs.iter().enumerate() {
+            if AUDIT_CANCELLED.load(Ordering::SeqCst) {
+                return Err("Quá trình quét kênh đã bị người dùng hủy bỏ.".to_string());
+            }
+
+            let tab_dir = target_dir.join(tab);
+            std::fs::create_dir_all(&tab_dir).map_err(|e| format!("Lỗi tạo thư mục tab {}: {}", tab, e))?;
+
+            let tab_url = format!("{}/{}", base_url.trim_end_matches('/'), tab);
+
+            let tab_percent_base = 10 + (tab_idx * 75 / tab_count);
+            let _ = app.emit(
+                "channel-audit-progress",
+                serde_json::json!({
+                    "phase": "tab_crawling",
+                    "tab": tab,
+                    "percent": tab_percent_base,
+                    "message": format!("Đang cào dữ liệu tab '{}'...", tab)
+                }),
+            );
+
+            let mut cmd = Command::new(get_tool_path("yt-dlp"));
+            cmd.arg("--skip-download")
+                .arg("--write-info-json")
+                .arg("--ignore-errors")
+                .arg("--no-overwrites")
+                .arg("--no-warnings");
+
+            if let Some(ffdir) = get_ffmpeg_dir() {
+                cmd.arg("--ffmpeg-location").arg(&ffdir);
+            }
+
+            if options.anti_bot_delay {
+                cmd.arg("--sleep-interval").arg("1").arg("--max-sleep-interval").arg("3");
+            }
+
+            let out_pattern = format!("{}/%(upload_date)s_%(id)s.%(ext)s", tab_dir.to_string_lossy().replace('\\', "/"));
+            cmd.arg("-o").arg(&out_pattern);
+
+            if options.limit > 0 {
+                cmd.arg("--playlist-end").arg(options.limit.to_string());
+            }
+
+            if options.download_thumbnails {
+                cmd.arg("--write-thumbnail").arg("--convert-thumbnails").arg("jpg");
+            }
+
+            if options.download_subs {
+                cmd.arg("--write-auto-subs")
+                    .arg("--sub-langs")
+                    .arg("vi.*,en.*")
+                    .arg("--sub-format")
+                    .arg("vtt");
+            }
+
+            if options.download_comments {
+                cmd.arg("--write-comments")
+                    .arg("--extractor-args")
+                    .arg("youtube:max_comments=100,100,0,0;comment_sort=top");
+            }
+
+            if let Some(ref browser) = options.cookies_browser {
+                let b = browser.trim();
+                if !b.is_empty() && b != "none" {
+                    cmd.arg("--cookies-from-browser").arg(b);
+                }
+            }
+
+            cmd.arg("--").arg(&tab_url);
+
+            cmd.stdout(Stdio::piped());
+            cmd.stderr(Stdio::piped());
+            #[cfg(target_os = "windows")]
+            cmd.creation_flags(CREATE_NO_WINDOW);
+
+            let mut child = cmd.spawn().map_err(|e| format!("Lỗi khởi chạy yt-dlp cho tab {}: {}", tab, e))?;
+
+            if let Ok(mut guard) = AUDIT_PID.lock() {
+                *guard = Some(child.id());
+            }
+
+            if let Some(stdout) = child.stdout.take() {
+                let reader = BufReader::new(stdout);
+                for line_result in reader.lines() {
+                    if AUDIT_CANCELLED.load(Ordering::SeqCst) {
+                        break;
+                    }
+                    if let Ok(line) = line_result {
+                        let trimmed = line.trim();
+                        if !trimmed.is_empty() {
+                            let _ = app.emit(
+                                "channel-audit-progress",
+                                serde_json::json!({
+                                    "phase": "tab_crawling",
+                                    "tab": tab,
+                                    "log": trimmed,
+                                    "message": trimmed
+                                }),
+                            );
+                        }
+                    }
+                }
+            }
+
+            let _ = child.wait();
+
+            if let Ok(mut guard) = AUDIT_PID.lock() {
+                *guard = None;
+            }
+        }
+
+        if AUDIT_CANCELLED.load(Ordering::SeqCst) {
+            return Err("Quá trình quét kênh đã bị người dùng hủy bỏ.".to_string());
+        }
+
+        let _ = app.emit(
+            "channel-audit-progress",
+            serde_json::json!({
+                "phase": "processing",
+                "percent": 88,
+                "message": "Đang tổng hợp dữ liệu, tạo bảng CSV và kịch bản cho AI..."
+            }),
+        );
+
+        let mut all_rows: Vec<serde_json::Value> = Vec::new();
+        let mut videos_count = 0;
+        let mut shorts_count = 0;
+        let mut streams_count = 0;
+        let mut total_views: u64 = 0;
+        let mut total_likes: u64 = 0;
+        let mut total_comments: u64 = 0;
+
+        let mut ai_transcripts = String::new();
+        ai_transcripts.push_str(&format!("# TỔNG HỢP KỊCH BẢN / PHỤ ĐỀ KÊNH: {}\n", channel_title));
+        ai_transcripts.push_str(&format!("# NGÀY QUÉT: {}\n\n", timestamp));
+
+        for tab in &selected_tabs {
+            let tab_dir = target_dir.join(tab);
+            if let Ok(entries) = std::fs::read_dir(&tab_dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let path_str = path.to_string_lossy().to_string();
+                    if path_str.ends_with(".info.json") {
+                        if let Ok(content) = std::fs::read_to_string(&path) {
+                            if let Ok(d) = serde_json::from_str::<serde_json::Value>(&content) {
+                                let id = d["id"].as_str().unwrap_or("").to_string();
+                                let title = d["title"].as_str().unwrap_or("").to_string();
+                                let url = d["webpage_url"]
+                                    .as_str()
+                                    .map(|u| u.to_string())
+                                    .unwrap_or_else(|| format!("https://www.youtube.com/watch?v={}", id));
+                                let raw_date = d["upload_date"].as_str().unwrap_or("");
+                                let formatted_date = if raw_date.len() == 8 {
+                                    format!("{}-{}-{}", &raw_date[0..4], &raw_date[4..6], &raw_date[6..8])
+                                } else {
+                                    raw_date.to_string()
+                                };
+                                let duration = d["duration"].as_u64().unwrap_or(0);
+                                let views = d["view_count"].as_u64().unwrap_or(0);
+                                let likes = d["like_count"].as_u64().unwrap_or(0);
+                                let comments_cnt = d["comment_count"].as_u64().unwrap_or(0);
+
+                                total_views += views;
+                                total_likes += likes;
+                                total_comments += comments_cnt;
+
+                                match tab.as_str() {
+                                    "shorts" => shorts_count += 1,
+                                    "streams" => streams_count += 1,
+                                    _ => videos_count += 1,
+                                }
+
+                                let categories = d["categories"].as_array().map(|arr| {
+                                    arr.iter().filter_map(|c| c.as_str()).collect::<Vec<_>>().join("; ")
+                                }).unwrap_or_default();
+
+                                let tags = d["tags"].as_array().map(|arr| {
+                                    arr.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>().join("; ")
+                                }).unwrap_or_default();
+
+                                let chapter_count = d["chapters"].as_array().map(|c| c.len()).unwrap_or(0);
+                                let live_status = d["live_status"].as_str().unwrap_or("not_live").to_string();
+                                let age_limit = d["age_limit"].as_i64().unwrap_or(0);
+                                let availability = d["availability"].as_str().unwrap_or("public").to_string();
+
+                                let base_prefix = path_str.trim_end_matches(".info.json");
+                                let thumb_file = format!("{}.jpg", base_prefix);
+                                let has_thumb = std::path::Path::new(&thumb_file).exists();
+
+                                let mut has_subs = false;
+                                let mut transcript_text = String::new();
+                                if let Ok(dir_entries) = std::fs::read_dir(&tab_dir) {
+                                    for de in dir_entries.flatten() {
+                                        let p = de.path();
+                                        let p_name = p.file_name().unwrap_or_default().to_string_lossy();
+                                        let stem = p.file_stem().unwrap_or_default().to_string_lossy();
+                                        if (p_name.ends_with(".vtt") || p_name.ends_with(".srt")) && stem.contains(&id) {
+                                            has_subs = true;
+                                            if let Ok(vtt_raw) = std::fs::read_to_string(&p) {
+                                                transcript_text = clean_vtt_to_plain_text(&vtt_raw);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if !transcript_text.is_empty() {
+                                    ai_transcripts.push_str("==================================================\n");
+                                    ai_transcripts.push_str(&format!("VIDEO: {}\nURL: {}\nNGÀY ĐĂNG: {} | LƯỢT XEM: {} | LIKES: {}\n", title, url, formatted_date, views, likes));
+                                    ai_transcripts.push_str("==================================================\n");
+                                    ai_transcripts.push_str(&transcript_text);
+                                    ai_transcripts.push_str("\n\n");
+                                }
+
+                                let top_comments_summary = if let Some(comments) = d["comments"].as_array() {
+                                    comments.iter().take(5).filter_map(|c| {
+                                        c["text"].as_str().map(|t| t.replace('\n', " ").replace('\r', "").trim().to_string())
+                                    }).collect::<Vec<_>>().join(" || ")
+                                } else {
+                                    String::new()
+                                };
+
+                                let description = d["description"].as_str().unwrap_or("").replace('\r', " ").replace('\n', " ");
+
+                                all_rows.push(serde_json::json!({
+                                    "tab": tab,
+                                    "id": id,
+                                    "url": url,
+                                    "upload_date": formatted_date,
+                                    "raw_date": raw_date,
+                                    "title": title,
+                                    "duration_sec": duration,
+                                    "duration_formatted": format_duration_hms(duration),
+                                    "view_count": views,
+                                    "like_count": likes,
+                                    "comment_count": comments_cnt,
+                                    "categories": categories,
+                                    "tags": tags,
+                                    "chapter_count": chapter_count,
+                                    "live_status": live_status,
+                                    "age_limit": age_limit,
+                                    "availability": availability,
+                                    "has_auto_subs": has_subs,
+                                    "thumbnail_file": if has_thumb { thumb_file } else { String::new() },
+                                    "top_comments": top_comments_summary,
+                                    "description": description
+                                }));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        all_rows.sort_by(|a, b| {
+            let va = a["view_count"].as_u64().unwrap_or(0);
+            let vb = b["view_count"].as_u64().unwrap_or(0);
+            vb.cmp(&va)
+        });
+
+        let total_crawled = all_rows.len();
+
+        let csv_path = target_dir.join("videos.csv");
+        let mut csv_content = String::from("\u{FEFF}");
+        csv_content.push_str("Tab,ID,URL,Ngày đăng,Tiêu đề,Thời lượng (giây),Thời lượng,Lượt xem,Lượt thích,Số bình luận,Danh mục,Tags,Số Chapters,Trạng thái Live,Giới hạn tuổi,Khả dụng,Có Transcript,Tệp Thumbnail,Top Bình luận,Mô tả\n");
+
+        for r in &all_rows {
+            let line = format!(
+                "{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+                escape_csv_cell(r["tab"].as_str().unwrap_or("")),
+                escape_csv_cell(r["id"].as_str().unwrap_or("")),
+                escape_csv_cell(r["url"].as_str().unwrap_or("")),
+                escape_csv_cell(r["upload_date"].as_str().unwrap_or("")),
+                escape_csv_cell(r["title"].as_str().unwrap_or("")),
+                r["duration_sec"].as_u64().unwrap_or(0),
+                escape_csv_cell(r["duration_formatted"].as_str().unwrap_or("")),
+                r["view_count"].as_u64().unwrap_or(0),
+                r["like_count"].as_u64().unwrap_or(0),
+                r["comment_count"].as_u64().unwrap_or(0),
+                escape_csv_cell(r["categories"].as_str().unwrap_or("")),
+                escape_csv_cell(r["tags"].as_str().unwrap_or("")),
+                r["chapter_count"].as_u64().unwrap_or(0),
+                escape_csv_cell(r["live_status"].as_str().unwrap_or("")),
+                r["age_limit"].as_i64().unwrap_or(0),
+                escape_csv_cell(r["availability"].as_str().unwrap_or("")),
+                if r["has_auto_subs"].as_bool().unwrap_or(false) { "Có" } else { "Không" },
+                escape_csv_cell(r["thumbnail_file"].as_str().unwrap_or("")),
+                escape_csv_cell(r["top_comments"].as_str().unwrap_or("")),
+                escape_csv_cell(r["description"].as_str().unwrap_or("")),
+            );
+            csv_content.push_str(&line);
+        }
+        let _ = std::fs::write(&csv_path, csv_content);
+
+        let ai_transcripts_path = target_dir.join("transcripts_for_ai.txt");
+        let _ = std::fs::write(&ai_transcripts_path, ai_transcripts);
+
+        let summary_json_path = target_dir.join("summary.json");
+        let summary_data = serde_json::json!({
+            "channel_title": channel_title,
+            "channel_subscribers": channel_subs,
+            "total_crawled": total_crawled,
+            "videos_count": videos_count,
+            "shorts_count": shorts_count,
+            "streams_count": streams_count,
+            "total_views": total_views,
+            "total_likes": total_likes,
+            "total_comments": total_comments,
+            "folder": target_dir.to_string_lossy().to_string(),
+            "csv_file": csv_path.to_string_lossy().to_string(),
+            "ai_transcripts_file": ai_transcripts_path.to_string_lossy().to_string()
+        });
+        let _ = std::fs::write(&summary_json_path, serde_json::to_string_pretty(&summary_data).unwrap_or_default());
+
+        let _ = app.emit(
+            "channel-audit-progress",
+            serde_json::json!({
+                "phase": "done",
+                "percent": 100,
+                "message": format!("Đã hoàn tất quét {} video! Đã tạo videos.csv và transcripts_for_ai.txt", total_crawled),
+                "folder": target_dir.to_string_lossy().to_string()
+            }),
+        );
+
+        let sample_videos: Vec<serde_json::Value> = all_rows.into_iter().take(50).collect();
+
+        Ok(ChannelAuditResult {
+            folder: target_dir.to_string_lossy().to_string(),
+            csv_file: csv_path.to_string_lossy().to_string(),
+            channel_json: channel_json_path.to_string_lossy().to_string(),
+            ai_transcripts_file: ai_transcripts_path.to_string_lossy().to_string(),
+            total_crawled,
+            videos_count,
+            shorts_count,
+            streams_count,
+            total_views,
+            total_likes,
+            total_comments,
+            channel_title,
+            channel_subscribers: channel_subs,
+            sample_videos,
+        })
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 #[tauri::command]
 async fn download_media(
     app: AppHandle,
@@ -932,6 +1527,11 @@ fn resolve_actual_file_path(path: &str) -> Option<String> {
 }
 
 #[tauri::command]
+fn read_text_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("Không thể đọc tệp: {}", e))
+}
+
+#[tauri::command]
 fn open_file(path: String) -> Result<(), String> {
     if let Some(target) = resolve_actual_file_path(&path) {
         let mut cmd = Command::new("explorer");
@@ -1057,6 +1657,9 @@ pub fn run() {
             download_media,
             download_all_thumbnails,
             download_all_subtitles,
+            start_channel_audit,
+            cancel_channel_audit,
+            read_text_file,
             open_file,
             open_file_folder,
             open_file_path,

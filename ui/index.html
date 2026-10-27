@@ -61,6 +61,13 @@
           <span>So sánh Video</span>
         </button>
 
+        <button id="channel-audit-nav-btn" class="icon-btn-text" title="Phân tích & Quét chuyên sâu Kênh YouTube (Channel Deep Audit & Spy)">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon>
+          </svg>
+          <span>Quét Kênh Chuyên Sâu</span>
+        </button>
+
         <button id="theme-toggle-btn" class="icon-btn" title="Chuyển đổi Sáng / Tối">
           <span id="theme-icon">🌙</span>
         </button>
@@ -262,6 +269,7 @@
             <p id="channel-desc-text" class="channel-desc-text">--</p>
           </div>
           <div class="channel-header-actions">
+            <button id="channel-audit-btn" class="btn-primary" title="Cào siêu dữ liệu, phụ đề transcript, top comment toàn bộ kênh đối thủ">🚀 Quét Sâu Kênh (Audit / Spy)</button>
             <button id="channel-open-url-btn" class="btn-secondary">🔗 Mở Kênh</button>
             <button id="channel-export-csv-btn" class="btn-secondary">📊 Xuất CSV Video</button>
             <button id="channel-dl-srt-btn" class="btn-secondary">💬 Xuất SRT Video</button>
@@ -835,6 +843,184 @@
             </thead>
             <tbody id="compare-tbody"></tbody>
           </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- CHANNEL AUDIT & SPY MODAL -->
+  <div id="channel-audit-modal" class="modal hidden">
+    <div class="modal-backdrop" id="audit-modal-backdrop"></div>
+    <div class="modal-card audit-modal-card">
+      <div class="modal-header">
+        <div>
+          <h3 class="modal-title">🚀 Quét & Phân Tích Chuyên Sâu Kênh (Channel Deep Audit & Spy)</h3>
+          <p class="modal-subtitle">Trích xuất siêu dữ liệu, phụ đề transcript cho AI, top bình luận và ảnh bìa từ kênh đối thủ</p>
+        </div>
+        <button id="close-audit-btn" class="icon-btn">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Input URL & Folder -->
+        <div class="audit-form-grid">
+          <div class="form-group">
+            <label class="form-label">Đường dẫn Kênh YouTube (@handle hoặc URL kênh):</label>
+            <div class="input-with-button">
+              <input type="text" id="audit-channel-url" class="modal-input" placeholder="Ví dụ: https://www.youtube.com/@MrBeast hoặc @F8VNOfficial" />
+              <button id="audit-paste-btn" class="btn-sm btn-secondary" title="Dán từ Clipboard">📋 Dán</button>
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label class="form-label">Thư mục lưu dữ liệu (videos.csv, transcript, thumbnails):</label>
+            <div class="input-with-button">
+              <input type="text" id="audit-folder-input" class="modal-input" placeholder="Mặc định: Downloads/ViewIndex_Audit/..." readonly />
+              <button id="audit-choose-folder-btn" class="btn-sm btn-secondary">📂 Chọn thư mục</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Options Config Grid -->
+        <div class="audit-config-card">
+          <h4 class="config-title">⚙️ Cấu hình dữ liệu cần cào</h4>
+          
+          <div class="config-columns">
+            <!-- Tabs selection -->
+            <div class="config-col">
+              <span class="config-col-title">1. Định dạng nội dung (Tabs):</span>
+              <label class="checkbox-label">
+                <input type="checkbox" id="audit-tab-videos" checked />
+                <span>Video dài (/videos)</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="audit-tab-shorts" checked />
+                <span>Shorts ngắn (/shorts)</span>
+              </label>
+              <label class="checkbox-label">
+                <input type="checkbox" id="audit-tab-streams" />
+                <span>Livestreams (/streams)</span>
+              </label>
+            </div>
+
+            <!-- Limit selection -->
+            <div class="config-col">
+              <span class="config-col-title">2. Giới hạn số lượng mỗi Tab:</span>
+              <select id="audit-limit-select" class="modal-select">
+                <option value="10">10 video (Quét siêu tốc để thử)</option>
+                <option value="30" selected>30 video (Khuyên dùng - Đủ mẫu)</option>
+                <option value="50">50 video mỗi tab</option>
+                <option value="100">100 video mỗi tab</option>
+                <option value="0">Tất cả video (Toàn bộ kênh)</option>
+              </select>
+              <p class="config-hint">Số video tối đa yt-dlp sẽ duyệt cho từng tab đã chọn.</p>
+            </div>
+
+            <!-- Extra resources -->
+            <div class="config-col">
+              <span class="config-col-title">3. Tài nguyên mở rộng:</span>
+              <label class="checkbox-label" title="Tải file transcript .vtt để AI phân tích kịch bản">
+                <input type="checkbox" id="audit-opt-subs" checked />
+                <span>📝 Transcript kịch bản (vi, en)</span>
+              </label>
+              <label class="checkbox-label" title="Trích xuất top 100 bình luận để phân tích phản hồi khán giả">
+                <input type="checkbox" id="audit-opt-comments" checked />
+                <span>💬 Top 100 bình luận nổi bật</span>
+              </label>
+              <label class="checkbox-label" title="Tải ảnh thu nhỏ JPG của từng video">
+                <input type="checkbox" id="audit-opt-thumbs" checked />
+                <span>🖼️ Ảnh bìa Thumbnail JPG</span>
+              </label>
+              <label class="checkbox-label" title="Giãn cách ngẫu nhiên 1-3s giữa các request">
+                <input type="checkbox" id="audit-opt-delay" checked />
+                <span>🛡️ Chống chặn IP (Sleep 1-3s)</span>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- Action Row -->
+        <div class="audit-action-row">
+          <button id="start-audit-btn" class="btn-primary btn-large">🚀 Bắt đầu Quét Chuyên Sâu</button>
+          <button id="cancel-audit-btn" class="btn-danger btn-large hidden">⏹️ Dừng lại (Hủy bỏ)</button>
+        </div>
+
+        <!-- Progress Box -->
+        <div id="audit-progress-box" class="audit-progress-box hidden">
+          <div class="progress-header-row">
+            <span id="audit-progress-status-text" class="audit-status-text">Đang khởi tạo...</span>
+            <span id="audit-progress-percent" class="audit-percent-text">0%</span>
+          </div>
+          <div class="audit-bar-wrapper">
+            <div id="audit-progress-bar" class="audit-bar-fill" style="width: 0%"></div>
+          </div>
+          <div class="audit-log-toggle-row">
+            <small id="audit-log-summary">Đang xử lý ngầm qua yt-dlp...</small>
+            <button id="audit-toggle-log-btn" class="btn-link">Xem chi tiết log ▼</button>
+          </div>
+          <div id="audit-log-console" class="audit-log-console hidden"></div>
+        </div>
+
+        <!-- Results Dashboard -->
+        <div id="audit-results-box" class="audit-results-box hidden">
+          <div class="audit-success-banner">
+            <div class="success-icon">🎉</div>
+            <div>
+              <h4 id="audit-res-channel-title">Kênh đã quét thành công!</h4>
+              <p id="audit-res-channel-meta">Đã phân tích 0 video và xuất báo cáo hoàn chỉnh.</p>
+            </div>
+          </div>
+
+          <!-- Stats Grid -->
+          <div class="audit-stats-grid">
+            <div class="audit-stat-card">
+              <span class="stat-label">Tổng video đã cào</span>
+              <strong id="audit-stat-total" class="stat-value">0</strong>
+              <small id="audit-stat-tabs-breakdown" class="stat-sub">0 video | 0 shorts | 0 live</small>
+            </div>
+            <div class="audit-stat-card">
+              <span class="stat-label">Tổng lượt xem (Views)</span>
+              <strong id="audit-stat-views" class="stat-value text-accent">0</strong>
+              <small id="audit-stat-avg-views" class="stat-sub">TB: 0 lượt xem / video</small>
+            </div>
+            <div class="audit-stat-card">
+              <span class="stat-label">Tổng lượt thích (Likes)</span>
+              <strong id="audit-stat-likes" class="stat-value">0</strong>
+              <small id="audit-stat-avg-likes" class="stat-sub">TB: 0 likes / video</small>
+            </div>
+            <div class="audit-stat-card">
+              <span class="stat-label">Tổng bình luận</span>
+              <strong id="audit-stat-comments" class="stat-value">0</strong>
+              <small class="stat-sub">Insight phản hồi người xem</small>
+            </div>
+          </div>
+
+          <!-- Output Actions -->
+          <div class="audit-output-actions">
+            <button id="audit-open-folder-btn" class="btn-secondary">📂 Mở thư mục kết quả</button>
+            <button id="audit-open-csv-btn" class="btn-secondary">📊 Mở tệp videos.csv</button>
+            <button id="audit-copy-ai-btn" class="btn-primary">🤖 Sao chép Kịch bản cho AI</button>
+          </div>
+
+          <!-- Top Videos Preview Table -->
+          <div class="audit-preview-table-wrap">
+            <h5 class="preview-table-title">Top video nổi bật (Sắp xếp theo Lượt xem):</h5>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Ảnh</th>
+                    <th>Định dạng</th>
+                    <th>Tiêu đề video</th>
+                    <th>Ngày đăng</th>
+                    <th>Lượt xem</th>
+                    <th>Likes</th>
+                    <th>Bình luận</th>
+                  </tr>
+                </thead>
+                <tbody id="audit-preview-tbody"></tbody>
+              </table>
+            </div>
+          </div>
         </div>
       </div>
     </div>

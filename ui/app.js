@@ -86,6 +86,51 @@ const toast = document.getElementById('toast');
 const toastMessage = document.getElementById('toast-message');
 const dragOverlay = document.getElementById('drag-overlay');
 
+// Channel Audit Modal Elements
+const channelAuditNavBtn = document.getElementById('channel-audit-nav-btn');
+const channelAuditBtn = document.getElementById('channel-audit-btn');
+const channelAuditModal = document.getElementById('channel-audit-modal');
+const closeAuditBtn = document.getElementById('close-audit-btn');
+const auditModalBackdrop = document.getElementById('audit-modal-backdrop');
+const auditChannelUrl = document.getElementById('audit-channel-url');
+const auditPasteBtn = document.getElementById('audit-paste-btn');
+const auditFolderInput = document.getElementById('audit-folder-input');
+const auditChooseFolderBtn = document.getElementById('audit-choose-folder-btn');
+const auditTabVideos = document.getElementById('audit-tab-videos');
+const auditTabShorts = document.getElementById('audit-tab-shorts');
+const auditTabStreams = document.getElementById('audit-tab-streams');
+const auditLimitSelect = document.getElementById('audit-limit-select');
+const auditOptSubs = document.getElementById('audit-opt-subs');
+const auditOptComments = document.getElementById('audit-opt-comments');
+const auditOptThumbs = document.getElementById('audit-opt-thumbs');
+const auditOptDelay = document.getElementById('audit-opt-delay');
+const startAuditBtn = document.getElementById('start-audit-btn');
+const cancelAuditBtn = document.getElementById('cancel-audit-btn');
+const auditProgressBox = document.getElementById('audit-progress-box');
+const auditProgressStatusText = document.getElementById('audit-progress-status-text');
+const auditProgressPercent = document.getElementById('audit-progress-percent');
+const auditProgressBar = document.getElementById('audit-progress-bar');
+const auditToggleLogBtn = document.getElementById('audit-toggle-log-btn');
+const auditLogSummary = document.getElementById('audit-log-summary');
+const auditLogConsole = document.getElementById('audit-log-console');
+const auditResultsBox = document.getElementById('audit-results-box');
+const auditResChannelTitle = document.getElementById('audit-res-channel-title');
+const auditResChannelMeta = document.getElementById('audit-res-channel-meta');
+const auditStatTotal = document.getElementById('audit-stat-total');
+const auditStatTabsBreakdown = document.getElementById('audit-stat-tabs-breakdown');
+const auditStatViews = document.getElementById('audit-stat-views');
+const auditStatAvgViews = document.getElementById('audit-stat-avg-views');
+const auditStatLikes = document.getElementById('audit-stat-likes');
+const auditStatAvgLikes = document.getElementById('audit-stat-avg-likes');
+const auditStatComments = document.getElementById('audit-stat-comments');
+const auditOpenFolderBtn = document.getElementById('audit-open-folder-btn');
+const auditOpenCsvBtn = document.getElementById('audit-open-csv-btn');
+const auditCopyAiBtn = document.getElementById('audit-copy-ai-btn');
+const auditPreviewTbody = document.getElementById('audit-preview-tbody');
+
+let currentAuditResult = null;
+let isAuditRunning = false;
+
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {
   initTheme();
@@ -473,6 +518,100 @@ function initEventListeners() {
   compareModalBtn.addEventListener('click', openCompareModal);
   closeCompareBtn.addEventListener('click', closeCompareModal);
   executeCompareBtn.addEventListener('click', executeComparison);
+
+  // Channel Audit Modal Listeners
+  if (channelAuditNavBtn) {
+    channelAuditNavBtn.addEventListener('click', () => openAuditModal());
+  }
+  if (channelAuditBtn) {
+    channelAuditBtn.addEventListener('click', () => {
+      let channelLink = '';
+      if (currentData) {
+        channelLink = currentData.channel_url || currentData.webpage_url || currentData.uploader_url || '';
+      }
+      openAuditModal(channelLink);
+    });
+  }
+  if (closeAuditBtn) {
+    closeAuditBtn.addEventListener('click', closeAuditModal);
+  }
+  if (auditModalBackdrop) {
+    auditModalBackdrop.addEventListener('click', closeAuditModal);
+  }
+  if (auditPasteBtn) {
+    auditPasteBtn.addEventListener('click', async () => {
+      try {
+        const text = await navigator.clipboard.readText();
+        if (text) {
+          auditChannelUrl.value = text.trim();
+          showToast("Đã dán từ bộ nhớ tạm!");
+        }
+      } catch (e) {
+        showToast("Không thể đọc bộ nhớ tạm", true);
+      }
+    });
+  }
+  if (auditChooseFolderBtn) {
+    auditChooseFolderBtn.addEventListener('click', async () => {
+      try {
+        const folder = await callTauri('select_folder');
+        if (folder) {
+          auditFolderInput.value = folder;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    });
+  }
+  if (auditToggleLogBtn) {
+    auditToggleLogBtn.addEventListener('click', () => {
+      auditLogConsole.classList.toggle('hidden');
+      auditToggleLogBtn.textContent = auditLogConsole.classList.contains('hidden') ? 'Xem chi tiết log ▼' : 'Thu gọn log ▲';
+    });
+  }
+  if (startAuditBtn) {
+    startAuditBtn.addEventListener('click', startChannelAuditExecution);
+  }
+  if (cancelAuditBtn) {
+    cancelAuditBtn.addEventListener('click', cancelChannelAuditExecution);
+  }
+  if (auditOpenFolderBtn) {
+    auditOpenFolderBtn.addEventListener('click', () => {
+      if (currentAuditResult && currentAuditResult.folder) {
+        callTauri('open_file_folder', { path: currentAuditResult.folder }).catch(() => {});
+      }
+    });
+  }
+  if (auditOpenCsvBtn) {
+    auditOpenCsvBtn.addEventListener('click', () => {
+      if (currentAuditResult && currentAuditResult.csv_file) {
+        callTauri('open_file', { path: currentAuditResult.csv_file }).catch(() => {});
+      }
+    });
+  }
+  if (auditCopyAiBtn) {
+    auditCopyAiBtn.addEventListener('click', copyAiTranscripts);
+  }
+
+  // Listen for channel-audit-progress from Rust backend
+  if (window.__TAURI__ && window.__TAURI__.event) {
+    window.__TAURI__.event.listen('channel-audit-progress', (event) => {
+      const p = event.payload;
+      if (!p) return;
+      if (p.percent !== undefined) {
+        auditProgressBar.style.width = `${p.percent}%`;
+        auditProgressPercent.textContent = `${p.percent}%`;
+      }
+      if (p.message) {
+        auditProgressStatusText.textContent = p.message;
+        auditLogSummary.textContent = p.message;
+      }
+      if (p.log) {
+        auditLogConsole.textContent += p.log + '\n';
+        auditLogConsole.scrollTop = auditLogConsole.scrollHeight;
+      }
+    });
+  }
 
   // Dynamic copy field buttons
   document.addEventListener('click', (e) => {
@@ -1354,6 +1493,162 @@ async function executeComparison() {
     compareLoading.classList.add('hidden');
     showToast("Lỗi khi so sánh: " + err, true);
   }
+}
+
+// Channel Deep Audit & Spy Functions
+function openAuditModal(prefillUrl = null) {
+  if (prefillUrl) {
+    auditChannelUrl.value = prefillUrl;
+  } else if (!auditChannelUrl.value) {
+    if (currentData && (currentData.channel_url || currentData.webpage_url || currentData.uploader_url)) {
+      auditChannelUrl.value = currentData.channel_url || currentData.webpage_url || currentData.uploader_url;
+    } else {
+      const val = urlInput.value.trim();
+      if (val.includes('/@') || val.includes('/channel/') || val.includes('/c/') || val.startsWith('@')) {
+        auditChannelUrl.value = val;
+      }
+    }
+  }
+  channelAuditModal.classList.remove('hidden');
+}
+
+function closeAuditModal() {
+  if (isAuditRunning) {
+    const ok = confirm("Quá trình quét kênh đang diễn ra ngầm. Bạn có chắc chắn muốn đóng cửa sổ không? (Quá trình cào vẫn tiếp tục chạy cho đến khi bạn bấm Dừng lại)");
+    if (!ok) return;
+  }
+  channelAuditModal.classList.add('hidden');
+}
+
+async function startChannelAuditExecution() {
+  const channelUrl = auditChannelUrl.value.trim();
+  if (!channelUrl) {
+    alert("Vui lòng nhập đường dẫn kênh YouTube hoặc @handle!");
+    auditChannelUrl.focus();
+    return;
+  }
+
+  const tabs = [];
+  if (auditTabVideos.checked) tabs.push('videos');
+  if (auditTabShorts.checked) tabs.push('shorts');
+  if (auditTabStreams.checked) tabs.push('streams');
+
+  if (tabs.length === 0) {
+    alert("Vui lòng chọn ít nhất 1 định dạng nội dung (Video dài, Shorts hoặc Streams)!");
+    return;
+  }
+
+  const options = {
+    channel_url: channelUrl,
+    target_folder: auditFolderInput.value.trim() || null,
+    tabs: tabs,
+    limit: parseInt(auditLimitSelect.value, 10) || 0,
+    download_subs: auditOptSubs.checked,
+    download_comments: auditOptComments.checked,
+    download_thumbnails: auditOptThumbs.checked,
+    anti_bot_delay: auditOptDelay.checked,
+    cookies_browser: cookieSelect ? cookieSelect.value : null
+  };
+
+  isAuditRunning = true;
+  startAuditBtn.classList.add('hidden');
+  cancelAuditBtn.classList.remove('hidden');
+  auditProgressBox.classList.remove('hidden');
+  auditResultsBox.classList.add('hidden');
+  auditProgressBar.style.width = '3%';
+  auditProgressPercent.textContent = '3%';
+  auditProgressStatusText.textContent = 'Đang kết nối và lấy thông tin kênh...';
+  auditLogSummary.textContent = 'Đang khởi chạy yt-dlp...';
+  auditLogConsole.textContent = '';
+
+  try {
+    const res = await callTauri('start_channel_audit', { options });
+    currentAuditResult = res;
+    renderAuditResults(res);
+    showToast("🎉 Quét và phân tích kênh hoàn tất!");
+  } catch (err) {
+    alert("Lỗi khi quét kênh: " + err);
+  } finally {
+    isAuditRunning = false;
+    startAuditBtn.classList.remove('hidden');
+    cancelAuditBtn.classList.add('hidden');
+  }
+}
+
+async function cancelChannelAuditExecution() {
+  auditProgressStatusText.textContent = "Đang dừng lại quá trình quét...";
+  try {
+    await callTauri('cancel_channel_audit');
+    showToast("Đã gửi lệnh dừng quá trình cào kênh.");
+  } catch (err) {
+    console.error(err);
+  }
+}
+
+function renderAuditResults(res) {
+  auditProgressBox.classList.add('hidden');
+  auditResultsBox.classList.remove('hidden');
+
+  auditResChannelTitle.textContent = res.channel_title || 'Kênh YouTube';
+  auditResChannelMeta.textContent = `${res.channel_subscribers} • Đã phân tích ${res.total_crawled} video • Lưu tại thư mục: ${res.folder}`;
+
+  auditStatTotal.textContent = formatNumber(res.total_crawled);
+  auditStatTabsBreakdown.textContent = `${res.videos_count} video dài | ${res.shorts_count} shorts | ${res.streams_count} live`;
+
+  auditStatViews.textContent = formatCompact(res.total_views);
+  const avgViews = res.total_crawled > 0 ? Math.round(res.total_views / res.total_crawled) : 0;
+  auditStatAvgViews.textContent = `TB: ${formatCompact(avgViews)} views/video`;
+
+  auditStatLikes.textContent = formatCompact(res.total_likes);
+  const avgLikes = res.total_crawled > 0 ? Math.round(res.total_likes / res.total_crawled) : 0;
+  auditStatAvgLikes.textContent = `TB: ${formatCompact(avgLikes)} likes/video`;
+
+  auditStatComments.textContent = formatCompact(res.total_comments);
+
+  auditPreviewTbody.innerHTML = '';
+  const list = res.sample_videos || [];
+  if (list.length === 0) {
+    auditPreviewTbody.innerHTML = '<tr><td colspan="8" style="text-align:center; color: var(--text-muted); padding: 16px;">Không tìm thấy video nào theo tiêu chí đã chọn.</td></tr>';
+    return;
+  }
+
+  list.forEach((v, idx) => {
+    const tr = document.createElement('tr');
+    const thumbUrl = v.thumbnail_file || (v.id ? `https://i.ytimg.com/vi/${v.id}/hqdefault.jpg` : '');
+    const tabClass = v.tab === 'shorts' ? 'tab-badge-shorts' : (v.tab === 'streams' ? 'tab-badge-streams' : 'tab-badge-videos');
+    tr.innerHTML = `
+      <td>${idx + 1}</td>
+      <td><img src="${thumbUrl}" class="audit-thumb-mini" onerror="this.src='https://www.youtube.com/s/desktop/9963e639/img/favicon_144x144.png'" /></td>
+      <td><span class="tab-badge ${tabClass}">${v.tab}</span></td>
+      <td>
+        <div style="font-weight: 600; font-size: 0.82rem; max-width: 320px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;" title="${escapeHtml(v.title)}">
+          ${escapeHtml(v.title)}
+        </div>
+        <small style="color: var(--text-muted); font-size: 0.72rem;">ID: ${v.id} • ${v.duration_formatted || '--'}</small>
+      </td>
+      <td>${v.upload_date || '--'}</td>
+      <td style="font-weight: 700; color: var(--accent-primary);">${formatNumber(v.view_count)}</td>
+      <td>${formatNumber(v.like_count)}</td>
+      <td>${formatNumber(v.comment_count)}</td>
+    `;
+    auditPreviewTbody.appendChild(tr);
+  });
+}
+
+async function copyAiTranscripts() {
+  if (!currentAuditResult) return;
+  if (currentAuditResult.ai_transcripts_file) {
+    try {
+      const text = await callTauri('read_text_file', { path: currentAuditResult.ai_transcripts_file });
+      if (text && text.trim().length > 50) {
+        copyToClipboard(text, "Đã sao chép toàn bộ kịch bản phụ đề của kênh cho AI!");
+        return;
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  }
+  copyToClipboard(JSON.stringify(currentAuditResult, null, 2), "Đã sao chép bản tóm tắt dữ liệu kênh!");
 }
 
 // Export Formats CSV
