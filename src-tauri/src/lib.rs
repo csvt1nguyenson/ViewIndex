@@ -180,6 +180,16 @@ async fn update_ytdlp() -> Result<String, String> {
     Ok(format!("yt-dlp hiện tại là phiên bản: {}", ver))
 }
 
+fn is_cookie_extraction_error(raw_err: &str) -> bool {
+    let lower = raw_err.to_lowercase();
+    lower.contains("could not copy")
+        || lower.contains("cookie database")
+        || lower.contains("cookies database")
+        || (lower.contains("could not find") && lower.contains("cookies"))
+        || lower.contains("failed to decrypt with dpapi")
+        || lower.contains("dpapi")
+}
+
 fn format_ytdlp_error(raw_err: &str) -> String {
     let lower = raw_err.to_lowercase();
 
@@ -191,12 +201,12 @@ fn format_ytdlp_error(raw_err: &str) -> String {
         || lower.contains("sign in to confirm you're not a bot")
         || lower.contains("sign in to confirm you’re not a bot")
     {
-        return "Video không khả dụng (Video này đã bị chủ kênh xóa, bị ẩn hoặc đang đặt ở chế độ Riêng tư trên YouTube).".to_string();
+        return "Video không khả dụng (Video này không tồn tại, đã bị chủ kênh xóa, bị ẩn hoặc đang đặt ở chế độ Riêng tư trên YouTube).".to_string();
     }
 
-    // 2. Cookie decryption failure on Windows (App-Bound Encryption / DPAPI)
-    if lower.contains("failed to decrypt with dpapi") || lower.contains("dpapi") {
-        return "Không thể giải mã Cookie từ trình duyệt này (do bảo mật Windows). Vui lòng chọn 'Không dùng cookies' hoặc đóng trình duyệt trước khi thử lại.".to_string();
+    // 2. Cookie extraction / decryption failure on Windows
+    if is_cookie_extraction_error(raw_err) {
+        return "Không thể đọc Cookie từ trình duyệt đã chọn (do trình duyệt đang mở hoặc chưa cài đặt trên máy). Hãy chuyển về 'Không dùng cookies'.".to_string();
     }
 
     // 3. Rate limiting / HTTP 429
@@ -242,24 +252,11 @@ fn format_ytdlp_error(raw_err: &str) -> String {
     }
 }
 
-#[tauri::command]
-async fn analyze_url(
-    url: String,
-    cookies_browser: Option<String>,
-) -> Result<serde_json::Value, String> {
-    let trimmed_url = url.trim();
-    if trimmed_url.is_empty() {
-        return Err("Vui lòng nhập đường dẫn URL YouTube hợp lệ.".to_string());
-    }
-
-    let is_watch_video = trimmed_url.contains("/watch") || trimmed_url.contains("youtu.be/");
-    let is_playlist_or_channel = !is_watch_video
-        && (trimmed_url.contains("/@")
-            || trimmed_url.contains("/channel/")
-            || trimmed_url.contains("/c/")
-            || trimmed_url.contains("/playlist")
-            || trimmed_url.contains("/user/"));
-
+fn build_analyze_command(
+    url: &str,
+    is_playlist_or_channel: bool,
+    cookies_browser: Option<&str>,
+) -> Command {
     let mut cmd = Command::new(get_tool_path("yt-dlp"));
     cmd.arg("--dump-single-json").arg("--no-warnings");
 
@@ -280,10 +277,38 @@ async fn analyze_url(
         }
     }
 
-    cmd.arg("--").arg(trimmed_url);
+    cmd.arg("--").arg(url);
 
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
+
+    cmd
+}
+
+#[tauri::command]
+async fn analyze_url(
+    url: String,
+    cookies_browser: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let trimmed_url = url.trim();
+    if trimmed_url.is_empty() {
+        return Err("Vui lòng nhập đường dẫn URL YouTube hợp lệ.".to_string());
+    }
+
+    let is_watch_video = trimmed_url.contains("/watch") || trimmed_url.contains("youtu.be/");
+    let is_playlist_or_channel = !is_watch_video
+        && (trimmed_url.contains("/@")
+            || trimmed_url.contains("/channel/")
+            || trimmed_url.contains("/c/")
+            || trimmed_url.contains("/playlist")
+            || trimmed_url.contains("/user/"));
+
+    let browser_choice = cookies_browser
+        .as_deref()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty() && *s != "none");
+
+    let mut cmd = build_analyze_command(trimmed_url, is_playlist_or_channel, browser_choice);
 
     let output = match cmd.output() {
         Ok(out) => out,
@@ -297,6 +322,23 @@ async fn analyze_url(
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
+        // NẾU CÓ CHỌN COOKIE MÀ BỊ LỖI DO TRÌNH DUYỆT ĐANG MỞ HOẶC CHƯA CÀI:
+        // TỰ ĐỘNG THỬ LẠI LẦN NỮA MÀ KHÔNG DÙNG COOKIE ĐỂ VIDEO BÌNH THƯỜNG VẪN CHẠY ĐƯỢC!
+        if browser_choice.is_some() && is_cookie_extraction_error(&stderr) {
+            let mut retry_cmd = build_analyze_command(trimmed_url, is_playlist_or_channel, None);
+            if let Ok(retry_output) = retry_cmd.output() {
+                if retry_output.status.success() {
+                    let stdout_str = String::from_utf8_lossy(&retry_output.stdout);
+                    match serde_json::from_str::<serde_json::Value>(&stdout_str) {
+                        Ok(json) => return Ok(json),
+                        Err(e) => return Err(format!("Lỗi khi phân giải dữ liệu JSON từ yt-dlp: {}", e)),
+                    }
+                } else {
+                    let retry_stderr = String::from_utf8_lossy(&retry_output.stderr);
+                    return Err(format_ytdlp_error(&retry_stderr));
+                }
+            }
+        }
         return Err(format_ytdlp_error(&stderr));
     }
 
