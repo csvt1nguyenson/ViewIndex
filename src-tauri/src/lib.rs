@@ -190,31 +190,50 @@ fn is_cookie_extraction_error(raw_err: &str) -> bool {
         || lower.contains("dpapi")
 }
 
+fn is_bot_challenge_error(raw_err: &str) -> bool {
+    let lower = raw_err.to_lowercase();
+    lower.contains("not a bot")
+        || lower.contains("confirm you")
+        || (lower.contains("bot") && lower.contains("sign in"))
+}
+
 fn format_ytdlp_error(raw_err: &str) -> String {
     let lower = raw_err.to_lowercase();
 
-    // 1. Video deleted / removed / private / unavailable (yt-dlp often misleadingly prints bot/cookies error for these)
+    // 1. Video deleted / removed / private / unavailable
     if lower.contains("video unavailable")
         || lower.contains("this video is unavailable")
         || lower.contains("this video has been removed")
         || lower.contains("private video")
-        || lower.contains("sign in to confirm you're not a bot")
-        || lower.contains("sign in to confirm you’re not a bot")
     {
         return "Video không khả dụng (Video này không tồn tại, đã bị chủ kênh xóa, bị ẩn hoặc đang đặt ở chế độ Riêng tư trên YouTube).".to_string();
     }
 
-    // 2. Cookie extraction / decryption failure on Windows
-    if is_cookie_extraction_error(raw_err) {
-        return "Không thể đọc Cookie từ trình duyệt đã chọn (do trình duyệt đang mở hoặc chưa cài đặt trên máy). Hãy chuyển về 'Không dùng cookies'.".to_string();
+    // 2. Region / Geo-restricted video (uploader blocked country)
+    if lower.contains("the uploader has not made this video available in your country")
+        || lower.contains("not made this video available in your country")
+        || lower.contains("not available in your country")
+        || lower.contains("available in your country")
+    {
+        return "Video bị chặn khu vực địa lý: Chủ sở hữu kênh giới hạn không cho phép phát video này tại địa chỉ IP / quốc gia của bạn. Vui lòng bật VPN hoặc đổi vị trí mạng sang quốc gia khác để phân tích.".to_string();
     }
 
-    // 3. Rate limiting / HTTP 429
+    // 3. Bot verification / Sign in challenge
+    if is_bot_challenge_error(raw_err) {
+        return "YouTube kích hoạt lớp bảo vệ bot (Bot verification). App đã tự động chuyển luồng di động/TV nhưng máy chủ vẫn từ chối. Vui lòng thử lại sau ít phút hoặc dùng VPN.".to_string();
+    }
+
+    // 4. Cookie extraction / decryption failure on Windows
+    if is_cookie_extraction_error(raw_err) {
+        return "Không thể trích xuất Cookie từ trình duyệt đã chọn (trình duyệt chưa cài đặt hoặc file cookie đang bị khóa do trình duyệt đang mở). App đã tự động chuyển sang chế độ không dùng Cookie.".to_string();
+    }
+
+    // 5. Rate limiting / HTTP 429
     if lower.contains("429") || lower.contains("too many requests") {
         return "YouTube đang tạm thời giới hạn tần suất yêu cầu (HTTP 429: Too Many Requests). Vui lòng thử lại sau ít phút.".to_string();
     }
 
-    // 4. Channel or Playlist not found
+    // 6. Channel or Playlist not found
     if lower.contains("not found")
         || lower.contains("unable to extract channel")
         || lower.contains("does not exist")
@@ -222,12 +241,12 @@ fn format_ytdlp_error(raw_err: &str) -> String {
         return "Không tìm thấy dữ liệu. Kênh hoặc Danh sách phát này không tồn tại hoặc đã bị đổi tên/xóa.".to_string();
     }
 
-    // 5. Invalid URL / ID
+    // 7. Invalid URL / ID
     if lower.contains("incomplete youtube id") || lower.contains("does not look like a valid") {
         return "Đường dẫn không hợp lệ. Vui lòng kiểm tra lại link YouTube đã nhập.".to_string();
     }
 
-    // 6. Network connection error
+    // 8. Network connection error
     if lower.contains("temporary failure in name resolution")
         || lower.contains("network is unreachable")
         || lower.contains("connection refused")
@@ -256,9 +275,13 @@ fn build_analyze_command(
     url: &str,
     is_playlist_or_channel: bool,
     cookies_browser: Option<&str>,
+    player_clients: Option<&str>,
 ) -> Command {
     let mut cmd = Command::new(get_tool_path("yt-dlp"));
     cmd.arg("--dump-single-json").arg("--no-warnings");
+
+    let clients = player_clients.unwrap_or("mweb,tv_embedded,web");
+    cmd.arg("--extractor-args").arg(format!("youtube:player_client={}", clients));
 
     if let Some(ffdir) = get_ffmpeg_dir() {
         cmd.arg("--ffmpeg-location").arg(&ffdir);
@@ -308,7 +331,8 @@ async fn analyze_url(
         .map(|s| s.trim())
         .filter(|s| !s.is_empty() && *s != "none");
 
-    let mut cmd = build_analyze_command(trimmed_url, is_playlist_or_channel, browser_choice);
+    // Lần 1: Chạy với cấu hình tiêu chuẩn tự động bypass bot (mweb,tv_embedded,web)
+    let mut cmd = build_analyze_command(trimmed_url, is_playlist_or_channel, browser_choice, None);
 
     let output = match cmd.output() {
         Ok(out) => out,
@@ -321,25 +345,44 @@ async fn analyze_url(
     };
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        // NẾU CÓ CHỌN COOKIE MÀ BỊ LỖI DO TRÌNH DUYỆT ĐANG MỞ HOẶC CHƯA CÀI:
-        // TỰ ĐỘNG THỬ LẠI LẦN NỮA MÀ KHÔNG DÙNG COOKIE ĐỂ VIDEO BÌNH THƯỜNG VẪN CHẠY ĐƯỢC!
-        if browser_choice.is_some() && is_cookie_extraction_error(&stderr) {
-            let mut retry_cmd = build_analyze_command(trimmed_url, is_playlist_or_channel, None);
-            if let Ok(retry_output) = retry_cmd.output() {
-                if retry_output.status.success() {
-                    let stdout_str = String::from_utf8_lossy(&retry_output.stdout);
-                    match serde_json::from_str::<serde_json::Value>(&stdout_str) {
-                        Ok(json) => return Ok(json),
-                        Err(e) => return Err(format!("Lỗi khi phân giải dữ liệu JSON từ yt-dlp: {}", e)),
+        let mut last_err = String::from_utf8_lossy(&output.stderr).to_string();
+
+        // Retry 1: Nếu người dùng chọn Cookie mà trình duyệt bị khóa hoặc chưa cài -> Bỏ Cookie và thử lại ngay!
+        if browser_choice.is_some() && is_cookie_extraction_error(&last_err) {
+            let mut retry_cookie_cmd = build_analyze_command(trimmed_url, is_playlist_or_channel, None, None);
+            if let Ok(retry_out) = retry_cookie_cmd.output() {
+                if retry_out.status.success() {
+                    let stdout_str = String::from_utf8_lossy(&retry_out.stdout);
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout_str) {
+                        return Ok(json);
                     }
                 } else {
-                    let retry_stderr = String::from_utf8_lossy(&retry_output.stderr);
-                    return Err(format_ytdlp_error(&retry_stderr));
+                    last_err = String::from_utf8_lossy(&retry_out.stderr).to_string();
                 }
             }
         }
-        return Err(format_ytdlp_error(&stderr));
+
+        // Retry 2: Nếu gặp thử thách bot "Sign in to confirm you're not a bot" -> Ép dùng thuần mweb,tv_embedded không dùng client web desktop
+        if is_bot_challenge_error(&last_err) {
+            let mut bot_retry_cmd = build_analyze_command(
+                trimmed_url,
+                is_playlist_or_channel,
+                None, // Luồng bot bypass không kèm cookie để tránh bị dính fingerprint desktop
+                Some("mweb,tv_embedded"),
+            );
+            if let Ok(retry_out) = bot_retry_cmd.output() {
+                if retry_out.status.success() {
+                    let stdout_str = String::from_utf8_lossy(&retry_out.stdout);
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout_str) {
+                        return Ok(json);
+                    }
+                } else {
+                    last_err = String::from_utf8_lossy(&retry_out.stderr).to_string();
+                }
+            }
+        }
+
+        return Err(format_ytdlp_error(&last_err));
     }
 
     let stdout_str = String::from_utf8_lossy(&output.stdout);
@@ -599,6 +642,7 @@ async fn download_all_subtitles(
         let before_count = count_srt_files(&target_dir);
 
         let mut cmd = Command::new(get_tool_path("yt-dlp"));
+        cmd.arg("--extractor-args").arg("youtube:player_client=mweb,tv_embedded,web");
         cmd.arg("--skip-download")
             .arg("--write-sub")
             .arg("--write-auto-sub")
@@ -851,6 +895,7 @@ async fn start_channel_audit(
         );
 
         let mut info_cmd = Command::new(get_tool_path("yt-dlp"));
+        info_cmd.arg("--extractor-args").arg("youtube:player_client=mweb,tv_embedded,web");
         info_cmd.args(["-J", "--flat-playlist", "--playlist-end", "1", "--no-warnings"]);
         if let Some(ffdir) = get_ffmpeg_dir() {
             info_cmd.arg("--ffmpeg-location").arg(&ffdir);
@@ -929,6 +974,7 @@ async fn start_channel_audit(
             );
 
             let mut cmd = Command::new(get_tool_path("yt-dlp"));
+            cmd.arg("--extractor-args").arg("youtube:player_client=mweb,tv_embedded,web");
             cmd.arg("--skip-download")
                 .arg("--write-info-json")
                 .arg("--ignore-errors")
@@ -1273,6 +1319,7 @@ async fn download_media(
     });
 
     let mut cmd = Command::new(get_tool_path("yt-dlp"));
+    cmd.arg("--extractor-args").arg("youtube:player_client=mweb,tv_embedded,web");
     cmd.arg("--newline");
     cmd.arg("--progress-template");
     cmd.arg("download:PROGRESS:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress._total_bytes_estimate_str)s");
