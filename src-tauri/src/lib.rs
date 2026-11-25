@@ -131,53 +131,19 @@ async fn update_ytdlp() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     cmd.creation_flags(CREATE_NO_WINDOW);
 
-    let output_u = cmd.output();
-    let mut needs_pip = false;
-
-    if let Ok(ref out) = output_u {
-        let text = format!(
-            "{} {}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-        if out.status.success() {
-            let ver = get_current_ytdlp_version();
-            return Ok(format!("Cập nhật thành công lên bản: {}", ver));
-        } else if text.contains("pip") || text.contains("PyPi") || text.contains("wheel") {
-            needs_pip = true;
-        }
-    } else {
-        needs_pip = true;
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Không thể chạy yt-dlp: {}", e))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Không thể cập nhật yt-dlp đang được app sử dụng: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
     }
-
-    if needs_pip {
-        let mut pip_cmd = Command::new("python");
-        pip_cmd.args(["-m", "pip", "install", "-U", "yt-dlp"]);
-        #[cfg(target_os = "windows")]
-        pip_cmd.creation_flags(CREATE_NO_WINDOW);
-
-        if let Ok(out) = pip_cmd.output() {
-            if out.status.success() {
-                let ver = get_current_ytdlp_version();
-                return Ok(format!("Đã cập nhật thành công lên phiên bản: {}", ver));
-            }
-        }
-
-        let mut direct_pip = Command::new("pip");
-        direct_pip.args(["install", "-U", "yt-dlp"]);
-        #[cfg(target_os = "windows")]
-        direct_pip.creation_flags(CREATE_NO_WINDOW);
-
-        if let Ok(out) = direct_pip.output() {
-            if out.status.success() {
-                let ver = get_current_ytdlp_version();
-                return Ok(format!("Đã cập nhật thành công lên phiên bản: {}", ver));
-            }
-        }
-    }
-
-    let ver = get_current_ytdlp_version();
-    Ok(format!("yt-dlp hiện tại là phiên bản: {}", ver))
+    Ok(format!(
+        "yt-dlp hiện tại là phiên bản: {}",
+        get_current_ytdlp_version()
+    ))
 }
 
 fn is_cookie_extraction_error(raw_err: &str) -> bool {
@@ -233,6 +199,10 @@ fn format_ytdlp_error(raw_err: &str) -> String {
         return "YouTube đang tạm thời giới hạn tần suất yêu cầu (HTTP 429: Too Many Requests). Vui lòng thử lại sau ít phút.".to_string();
     }
 
+    if lower.contains("requested format is not available") {
+        return "YouTube không cung cấp luồng phát cho video này. Hãy kiểm tra video có xem được trong trình duyệt, rồi thử chọn Cookies từ trình duyệt đó và phân tích lại.".to_string();
+    }
+
     // 6. Channel or Playlist not found
     if lower.contains("not found")
         || lower.contains("unable to extract channel")
@@ -280,8 +250,11 @@ fn build_analyze_command(
     let mut cmd = Command::new(get_tool_path("yt-dlp"));
     cmd.arg("--dump-single-json").arg("--no-warnings");
 
-    let clients = player_clients.unwrap_or("mweb,tv_embedded,web");
-    cmd.arg("--extractor-args").arg(format!("youtube:player_client={}", clients));
+    let clients = player_clients.unwrap_or("");
+    if !clients.is_empty() {
+        cmd.arg("--extractor-args")
+            .arg(format!("youtube:player_client={}", clients));
+    }
 
     if let Some(ffdir) = get_ffmpeg_dir() {
         cmd.arg("--ffmpeg-location").arg(&ffdir);
@@ -331,7 +304,7 @@ async fn analyze_url(
         .map(|s| s.trim())
         .filter(|s| !s.is_empty() && *s != "none");
 
-    // Lần 1: Chạy với cấu hình tiêu chuẩn tự động bypass bot (mweb,tv_embedded,web)
+    // Let yt-dlp choose its current default clients; forced clients can hide available formats.
     let mut cmd = build_analyze_command(trimmed_url, is_playlist_or_channel, browser_choice, None);
 
     let output = match cmd.output() {
@@ -349,7 +322,8 @@ async fn analyze_url(
 
         // Retry 1: Nếu người dùng chọn Cookie mà trình duyệt bị khóa hoặc chưa cài -> Bỏ Cookie và thử lại ngay!
         if browser_choice.is_some() && is_cookie_extraction_error(&last_err) {
-            let mut retry_cookie_cmd = build_analyze_command(trimmed_url, is_playlist_or_channel, None, None);
+            let mut retry_cookie_cmd =
+                build_analyze_command(trimmed_url, is_playlist_or_channel, None, None);
             if let Ok(retry_out) = retry_cookie_cmd.output() {
                 if retry_out.status.success() {
                     let stdout_str = String::from_utf8_lossy(&retry_out.stdout);
@@ -374,6 +348,25 @@ async fn analyze_url(
                 if retry_out.status.success() {
                     let stdout_str = String::from_utf8_lossy(&retry_out.stdout);
                     if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout_str) {
+                        return Ok(json);
+                    }
+                } else {
+                    last_err = String::from_utf8_lossy(&retry_out.stderr).to_string();
+                }
+            }
+        }
+
+        if !is_playlist_or_channel && last_err.contains("Requested format is not available") {
+            let mut alternate_client_cmd = build_analyze_command(
+                trimmed_url,
+                false,
+                browser_choice,
+                Some("mweb,tv_embedded,web"),
+            );
+            if let Ok(retry_out) = alternate_client_cmd.output() {
+                if retry_out.status.success() {
+                    if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&retry_out.stdout)
+                    {
                         return Ok(json);
                     }
                 } else {
@@ -561,7 +554,7 @@ fn is_regular_video_for_subtitles(video: &serde_json::Value) -> bool {
     }
 
     let duration = video["duration"].as_f64().unwrap_or(0.0);
-    if duration <= 0.0 || duration <= 180.0 {
+    if duration <= 0.0 {
         return false;
     }
 
@@ -571,29 +564,13 @@ fn is_regular_video_for_subtitles(video: &serde_json::Value) -> bool {
     let was_live = video["was_live"].as_bool().unwrap_or(false);
 
     !was_live
-        && !live_status.contains("live")
+        && live_status != "is_live"
+        && live_status != "is_upcoming"
+        && live_status != "post_live"
         && !url.contains("/live/")
         && !url.contains("/shorts/")
         && !title.contains("#shorts")
         && !title.contains("[live]")
-}
-
-fn count_srt_files(dir: &std::path::Path) -> usize {
-    std::fs::read_dir(dir)
-        .map(|entries| {
-            entries
-                .flatten()
-                .filter(|entry| {
-                    entry
-                        .path()
-                        .extension()
-                        .and_then(|ext| ext.to_str())
-                        .map(|ext| ext.eq_ignore_ascii_case("srt"))
-                        .unwrap_or(false)
-                })
-                .count()
-        })
-        .unwrap_or(0)
 }
 
 #[tauri::command]
@@ -631,6 +608,7 @@ async fn download_all_subtitles(
         let title = video["title"].as_str().unwrap_or("video");
         let url = video["url"]
             .as_str()
+            .filter(|u| u.starts_with("https://") || u.starts_with("http://"))
             .map(|u| u.to_string())
             .unwrap_or_else(|| format!("https://www.youtube.com/watch?v={}", id));
 
@@ -639,10 +617,9 @@ async fn download_all_subtitles(
             .join(format!("{:03} - {} - {}.%(ext)s", idx + 1, safe_title, id))
             .to_string_lossy()
             .to_string();
-        let before_count = count_srt_files(&target_dir);
+        let file_prefix = format!("{:03} - {} - {}.", idx + 1, safe_title, id);
 
         let mut cmd = Command::new(get_tool_path("yt-dlp"));
-        cmd.arg("--extractor-args").arg("youtube:player_client=mweb,tv_embedded,web");
         cmd.arg("--skip-download")
             .arg("--write-sub")
             .arg("--write-auto-sub")
@@ -653,7 +630,6 @@ async fn download_all_subtitles(
             .arg("--convert-subs")
             .arg("srt")
             .arg("--no-playlist")
-            .arg("--ignore-errors")
             .arg("-o")
             .arg(&output_template);
 
@@ -675,8 +651,15 @@ async fn download_all_subtitles(
 
         match cmd.output() {
             Ok(output) => {
-                let after_count = count_srt_files(&target_dir);
-                if output.status.success() && after_count > before_count {
+                let has_srt = std::fs::read_dir(&target_dir)
+                    .map(|entries| {
+                        entries.flatten().any(|entry| {
+                            let name = entry.file_name().to_string_lossy().to_string();
+                            name.starts_with(&file_prefix) && name.to_lowercase().ends_with(".srt")
+                        })
+                    })
+                    .unwrap_or(false);
+                if output.status.success() && has_srt {
                     downloaded += 1;
                 } else {
                     failed += 1;
@@ -895,7 +878,6 @@ async fn start_channel_audit(
         );
 
         let mut info_cmd = Command::new(get_tool_path("yt-dlp"));
-        info_cmd.arg("--extractor-args").arg("youtube:player_client=mweb,tv_embedded,web");
         info_cmd.args(["-J", "--flat-playlist", "--playlist-end", "1", "--no-warnings"]);
         if let Some(ffdir) = get_ffmpeg_dir() {
             info_cmd.arg("--ffmpeg-location").arg(&ffdir);
@@ -974,10 +956,8 @@ async fn start_channel_audit(
             );
 
             let mut cmd = Command::new(get_tool_path("yt-dlp"));
-            cmd.arg("--extractor-args").arg("youtube:player_client=mweb,tv_embedded,web");
             cmd.arg("--skip-download")
                 .arg("--write-info-json")
-                .arg("--ignore-errors")
                 .arg("--no-overwrites")
                 .arg("--no-warnings");
 
@@ -1034,6 +1014,16 @@ async fn start_channel_audit(
                 *guard = Some(child.id());
             }
 
+            let stderr = child.stderr.take();
+            let stderr_reader = std::thread::spawn(move || {
+                let mut output = String::new();
+                if let Some(stream) = stderr {
+                    use std::io::Read;
+                    let _ = BufReader::new(stream).read_to_string(&mut output);
+                }
+                output
+            });
+
             if let Some(stdout) = child.stdout.take() {
                 let reader = BufReader::new(stdout);
                 for line_result in reader.lines() {
@@ -1057,10 +1047,14 @@ async fn start_channel_audit(
                 }
             }
 
-            let _ = child.wait();
+            let status = child.wait().map_err(|e| format!("Lỗi chờ yt-dlp cho tab {}: {}", tab, e))?;
+            let stderr_output = stderr_reader.join().unwrap_or_default();
 
             if let Ok(mut guard) = AUDIT_PID.lock() {
                 *guard = None;
+            }
+            if !AUDIT_CANCELLED.load(Ordering::SeqCst) && !status.success() {
+                return Err(format!("Quét tab {} thất bại: {}", tab, format_ytdlp_error(&stderr_output)));
             }
         }
 
@@ -1319,7 +1313,6 @@ async fn download_media(
     });
 
     let mut cmd = Command::new(get_tool_path("yt-dlp"));
-    cmd.arg("--extractor-args").arg("youtube:player_client=mweb,tv_embedded,web");
     cmd.arg("--newline");
     cmd.arg("--progress-template");
     cmd.arg("download:PROGRESS:%(progress._percent_str)s|%(progress._speed_str)s|%(progress._eta_str)s|%(progress._total_bytes_estimate_str)s");
@@ -1379,7 +1372,8 @@ async fn download_media(
                     .arg("--write-auto-sub")
                     .arg("--sub-format")
                     .arg("srt")
-                    .arg("--ignore-errors");
+                    .arg("--convert-subs")
+                    .arg("srt");
 
                 let langs = if kind.starts_with("subtitles:") {
                     kind.trim_start_matches("subtitles:").to_string()
@@ -1514,7 +1508,7 @@ async fn download_media(
         }
     }
 
-    let _status = child
+    let status = child
         .wait()
         .map_err(|e| format!("Lỗi khi chờ tiến trình hoàn tất: {}", e))?;
     let err_output = stderr_handle.join().unwrap_or_default();
@@ -1522,7 +1516,7 @@ async fn download_media(
     let resolved = resolve_actual_file_path(&target_file_path);
     let file_exists = resolved.is_some();
 
-    if file_exists {
+    if status.success() && file_exists {
         let mut final_path = resolved.unwrap();
 
         // If user specifically requested an .srt file and yt-dlp produced an .en.srt / .vi.srt file:
@@ -1758,4 +1752,29 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn regular_video_is_not_filtered_as_live() {
+        let video = serde_json::json!({
+            "id": "4_kbT3_ofgY",
+            "duration": 120,
+            "live_status": "not_live",
+            "url": "https://www.youtube.com/watch?v=4_kbT3_ofgY"
+        });
+        assert!(is_regular_video_for_subtitles(&video));
+        assert!(!is_regular_video_for_subtitles(&serde_json::json!({
+            "id": "4_kbT3_ofgY", "duration": 120, "live_status": "is_live"
+        })));
+    }
+
+    #[test]
+    fn default_analysis_client_omits_override() {
+        let cmd = build_analyze_command("https://youtu.be/4_kbT3_ofgY", false, None, Some(""));
+        assert!(!cmd.get_args().any(|arg| arg == "--extractor-args"));
+    }
 }

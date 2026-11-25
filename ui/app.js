@@ -346,7 +346,7 @@ function initEventListeners() {
 
     try {
       const res = await callTauri('update_ytdlp');
-      showToast("Cập nhật thành công: " + res);
+      showToast("Kiểm tra cập nhật: " + res);
       await initSystem();
     } catch (err) {
       showToast("Lỗi cập nhật: " + err, true);
@@ -942,8 +942,8 @@ function getRegularChannelVideos() {
     const url = (v.url || v.webpage_url || '').toLowerCase();
     const liveStatus = (v.live_status || '').toLowerCase();
     const wasLive = Boolean(v.was_live);
-    const isLive = wasLive || liveStatus.includes('live') || url.includes('/live/') || title.includes('[live]');
-    const isShort = url.includes('/shorts/') || title.includes('#shorts') || (duration > 0 && duration <= 180);
+    const isLive = wasLive || ['is_live', 'is_upcoming', 'post_live'].includes(liveStatus) || url.includes('/live/') || title.includes('[live]');
+    const isShort = url.includes('/shorts/') || title.includes('#shorts');
     return v.id && duration > 0 && !isLive && !isShort;
   });
 }
